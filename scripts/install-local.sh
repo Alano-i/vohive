@@ -15,7 +15,7 @@ USB_UDEV_RULE="/etc/udev/rules.d/99-${APP_NAME}-dji-baiwang.rules"
 usage() {
 	cat <<EOF
 Usage:
-  sudo sh scripts/install-debian-binary.sh [path-to-vohive-binary]
+  sudo sh scripts/install-local.sh [path-to-vohive-binary]
 
 If no binary path is provided, the script auto-detects one from:
   ./dist/vohive_*_linux_<arch>
@@ -37,7 +37,7 @@ die() {
 
 require_root() {
 	if [ "$(id -u)" -ne 0 ]; then
-		die "please run as root, for example: sudo sh scripts/install-debian-binary.sh"
+		die "please run as root, for example: sudo sh scripts/install-local.sh"
 	fi
 }
 

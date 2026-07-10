@@ -122,9 +122,11 @@ latest_version() {
 download_installer() {
 	version="$1"
 	out="$2"
-	raw_tag="https://raw.githubusercontent.com/${REPO}/${version}/scripts/install-debian-binary.sh"
-	release_asset="https://github.com/${REPO}/releases/download/${version}/install-debian-binary.sh"
-	raw_main="https://raw.githubusercontent.com/${REPO}/main/scripts/install-debian-binary.sh"
+	raw_tag="https://raw.githubusercontent.com/${REPO}/${version}/scripts/install-local.sh"
+	release_asset="https://github.com/${REPO}/releases/download/${version}/install-local.sh"
+	raw_main="https://raw.githubusercontent.com/${REPO}/main/scripts/install-local.sh"
+	legacy_raw_tag="https://raw.githubusercontent.com/${REPO}/${version}/scripts/install-debian-binary.sh"
+	legacy_release_asset="https://github.com/${REPO}/releases/download/${version}/install-debian-binary.sh"
 
 	if try_download "$raw_tag" "$out"; then
 		return
@@ -133,6 +135,12 @@ download_installer() {
 		return
 	fi
 	if try_download "$raw_main" "$out"; then
+		return
+	fi
+	if try_download "$legacy_raw_tag" "$out"; then
+		return
+	fi
+	if try_download "$legacy_release_asset" "$out"; then
 		return
 	fi
 	die "unable to download installer script"
@@ -166,7 +174,7 @@ main() {
 	trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
 	binary="${tmpdir}/${asset}"
-	installer="${tmpdir}/install-debian-binary.sh"
+	installer="${tmpdir}/install-local.sh"
 
 	echo "Installing ${APP_NAME} ${VERSION} for linux/${arch} from ${REPO}"
 	download "${base}/${asset}" "$binary"

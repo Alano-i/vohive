@@ -194,8 +194,8 @@ jobs:
         shell: bash
         run: |
           cp scripts/install.sh dist/install.sh
-          cp scripts/install-debian-binary.sh dist/install-debian-binary.sh
-          chmod 0755 dist/install.sh dist/install-debian-binary.sh
+          cp scripts/install-local.sh dist/install-local.sh
+          chmod 0755 dist/install.sh dist/install-local.sh
 
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
