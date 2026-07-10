@@ -32,6 +32,57 @@ VoHive 把模组热插拔管理、SOCKS5/HTTP 代理编排、短信收发、VoWi
 - **Database**:SQLite(`vohive.db`)
 - **CI/CD**:GitHub Actions 自动化多架构 Docker 镜像构建与发布
 
+## 安装与卸载
+
+### Debian 一键安装
+
+在 Debian 或 Debian 兼容系统上执行:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install.sh | sudo sh
+```
+
+安装脚本会自动识别当前系统架构,并从最新 GitHub Release 下载对应平台的二进制包:
+
+- `amd64`
+- `arm64`
+- `armv7`
+
+如需安装指定版本:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install.sh | sudo sh -s -- --version v0.1.1
+```
+
+安装完成后:
+
+- 二进制文件: `/usr/local/bin/vohive`
+- 配置文件: `/etc/vohive/config.yaml`
+- 工作目录: `/var/lib/vohive`
+- systemd 服务: `vohive.service`
+- Web 管理地址: `http://<服务器IP>:7575`
+
+### 本地二进制安装
+
+如果已经手动下载或编译好了二进制文件,可以使用本地安装脚本:
+
+```sh
+sudo sh scripts/install-local.sh ./vohive_v0.1.1_linux_amd64
+```
+
+### 完整卸载
+
+执行以下命令会停止服务并删除 VoHive 安装产生的全部文件,包括二进制、配置、数据目录、systemd unit、udev 规则和 USB 驱动绑定脚本:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/uninstall.sh | sudo sh
+```
+
+如果是在源码目录内执行:
+
+```sh
+sudo sh scripts/uninstall.sh
+```
 
 ## 免责声明
 
