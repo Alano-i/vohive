@@ -155,6 +155,28 @@ print_access_hint() {
 	fi
 }
 
+ensure_restart_always() {
+	service="/etc/systemd/system/${APP_NAME}.service"
+	if ! command -v systemctl >/dev/null 2>&1 || [ ! -f "$service" ]; then
+		return
+	fi
+
+	if grep -q '^Restart=' "$service"; then
+		sed -i 's/^Restart=.*/Restart=always/' "$service"
+	else
+		tmp="${service}.tmp"
+		awk '
+			{ print }
+			$0 == "ExecStart=/usr/local/bin/vohive -c /etc/vohive/config.yaml" {
+				print "Restart=always"
+			}
+		' "$service" > "$tmp"
+		mv "$tmp" "$service"
+	fi
+	systemctl daemon-reload
+	systemctl restart "$APP_NAME"
+}
+
 main() {
 	require_root
 	if [ ! -f /etc/debian_version ]; then
@@ -184,6 +206,7 @@ main() {
 	chmod 0755 "$installer"
 
 	sh "$installer" "$binary"
+	ensure_restart_always
 	print_access_hint
 }
 

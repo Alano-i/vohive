@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"syscall"
@@ -198,6 +199,10 @@ func ApplyUpdate() error {
 	// 延迟退出以便接口能返回成功响应
 	go func() {
 		time.Sleep(2 * time.Second)
+		if scheduleServiceRestart(exec.LookPath, exec.Command) {
+			return
+		}
+
 		logger.Info("进程发出关闭信号以应用更新")
 		if process, err := os.FindProcess(os.Getpid()); err == nil {
 			process.Signal(syscall.SIGTERM)
@@ -207,4 +212,39 @@ func ApplyUpdate() error {
 	}()
 
 	return nil
+}
+
+type commandStarter func(name string, arg ...string) *exec.Cmd
+
+func scheduleServiceRestart(lookPath func(string) (string, error), command commandStarter) bool {
+	systemctlPath, err := lookPath("systemctl")
+	if err != nil {
+		return false
+	}
+
+	if systemdRunPath, err := lookPath("systemd-run"); err == nil {
+		cmd := command(
+			systemdRunPath,
+			"--unit=vohive-self-restart",
+			"--description=Restart VoHive after self update",
+			"--on-active=1s",
+			systemctlPath,
+			"restart",
+			"vohive",
+		)
+		if err := cmd.Start(); err == nil {
+			logger.Info("已通过 systemd-run 调度服务重启")
+			return true
+		} else {
+			logger.Warn("systemd-run 调度服务重启失败，尝试直接调用 systemctl", "err", err)
+		}
+	}
+
+	cmd := command(systemctlPath, "restart", "vohive")
+	if err := cmd.Start(); err != nil {
+		logger.Warn("调用 systemctl restart vohive 失败", "err", err)
+		return false
+	}
+	logger.Info("已调用 systemctl restart vohive")
+	return true
 }

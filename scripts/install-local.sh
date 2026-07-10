@@ -126,7 +126,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${WORK_DIR}
 ExecStart=${INSTALL_BIN} -c ${CONFIG_FILE}
-Restart=on-failure
+Restart=always
 RestartSec=5s
 Environment=CONFIG_PATH=${CONFIG_FILE}
 Environment=HOME=${WORK_DIR}
