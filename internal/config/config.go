@@ -78,6 +78,7 @@ type Config struct {
 	Bark     BarkConfig     `mapstructure:"bark"`
 	Email    EmailConfig    `mapstructure:"email"`
 	Pushplus PushplusConfig `mapstructure:"pushplus"`
+	WeCom    WeComConfig    `mapstructure:"wecom"`
 	Web      WebConfig      `mapstructure:"web"`
 	Proxy    ProxyConfig    `mapstructure:"proxy"`
 	VoWiFi   VoWiFiConfig   `mapstructure:"vowifi"`
@@ -141,10 +142,10 @@ type DeviceConfig struct {
 	USBPath       string `mapstructure:"-"` // Deprecated: 运行时按 IMEI 现解析,绝不从文件读取
 	ATPort        string `mapstructure:"-"` // Deprecated: 运行时解析;AT 终端用 Worker.ResolvedATPort()
 	ProxyPort     int    `mapstructure:"proxy_port"`
-	ManagePort    string `mapstructure:"-"` // Deprecated: 运行时解析,绝不从文件读取
-	Interface     string `mapstructure:"-"` // Deprecated: 运行时解析,绝不从文件读取
-	QMIDevice     string `mapstructure:"-"` // Deprecated: 运行时解析,绝不从文件读取
-	ControlDevice string `mapstructure:"-"` // Deprecated: 运行时按 IMEI 现解析,绝不从文件读取
+	ManagePort    string `mapstructure:"-"`              // Deprecated: 运行时解析,绝不从文件读取
+	Interface     string `mapstructure:"-"`              // Deprecated: 运行时解析,绝不从文件读取
+	QMIDevice     string `mapstructure:"-"`              // Deprecated: 运行时解析,绝不从文件读取
+	ControlDevice string `mapstructure:"-"`              // Deprecated: 运行时按 IMEI 现解析,绝不从文件读取
 	MBIMTransport string `mapstructure:"mbim_transport"` // MBIM 传输: auto|proxy|direct，默认 auto
 	QMIUseProxy   bool   `mapstructure:"qmi_use_proxy"`  // 是否通过 libqmi qmi-proxy 打开 QMI 控制口
 	// 可选：qmi-proxy abstract socket 名称和可执行文件路径。留空使用 quectel-qmi-go 默认值。
@@ -240,6 +241,28 @@ type PushplusConfig struct {
 	Channel string `mapstructure:"channel"`
 }
 
+const DefaultWeComAPIBaseURL = "https://qyapi.weixin.qq.com"
+
+type WeComConfig struct {
+	Enabled                bool   `mapstructure:"enabled"`
+	CorpID                 string `mapstructure:"corp_id"`
+	CorpSecret             string `mapstructure:"corp_secret"`
+	AgentID                int64  `mapstructure:"agent_id"`
+	ToUser                 string `mapstructure:"touser"`
+	ToParty                string `mapstructure:"toparty"`
+	ToTag                  string `mapstructure:"totag"`
+	ArticleTitle           string `mapstructure:"article_title"`
+	ArticleDescription     string `mapstructure:"article_description"`
+	ArticleURL             string `mapstructure:"article_url"`
+	ArticlePicURL          string `mapstructure:"article_picurl"`
+	ArticleButtonText      string `mapstructure:"article_button_text"`
+	MiniProgramAppID       string `mapstructure:"mini_program_appid"`
+	MiniProgramPagePath    string `mapstructure:"mini_program_pagepath"`
+	EnableDuplicateCheck   bool   `mapstructure:"enable_duplicate_check"`
+	DuplicateCheckInterval int    `mapstructure:"duplicate_check_interval"`
+	APIBaseURL             string `mapstructure:"api_base_url"`
+}
+
 func Load(path string) (*Config, error) {
 	viper.SetConfigFile(path)
 	viper.SetConfigType("yaml")
@@ -256,6 +279,12 @@ func Load(path string) (*Config, error) {
 	viper.SetDefault("email.enabled", false)
 	viper.SetDefault("email.use_ssl", false)
 	viper.SetDefault("pushplus.enabled", false)
+	viper.SetDefault("wecom.enabled", false)
+	viper.SetDefault("wecom.article_title", "VoHive 通知")
+	viper.SetDefault("wecom.article_description", "{{text}}")
+	viper.SetDefault("wecom.article_button_text", "查看详情")
+	viper.SetDefault("wecom.duplicate_check_interval", 1800)
+	viper.SetDefault("wecom.api_base_url", DefaultWeComAPIBaseURL)
 	viper.SetDefault("web.username", "admin")
 	viper.SetDefault("web.password", "admin")
 	viper.SetDefault("vowifi.enabled", false)

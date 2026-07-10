@@ -8,7 +8,7 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
-func UpdateNotificationInFile(path string, telegram TelegramConfig, feishu FeishuConfig, qq QQConfig, webhook WebhookConfig, bark BarkConfig, email EmailConfig, pushplus PushplusConfig) error {
+func UpdateNotificationInFile(path string, telegram TelegramConfig, feishu FeishuConfig, qq QQConfig, webhook WebhookConfig, bark BarkConfig, email EmailConfig, pushplus PushplusConfig, wecom WeComConfig) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("读取配置文件失败: %w", err)
@@ -76,6 +76,26 @@ func UpdateNotificationInFile(path string, telegram TelegramConfig, feishu Feish
 		"token":   pushplus.Token,
 		"topic":   pushplus.Topic,
 		"channel": pushplus.Channel,
+	}
+
+	root["wecom"] = map[string]any{
+		"enabled":                  wecom.Enabled,
+		"corp_id":                  wecom.CorpID,
+		"corp_secret":              wecom.CorpSecret,
+		"agent_id":                 wecom.AgentID,
+		"touser":                   wecom.ToUser,
+		"toparty":                  wecom.ToParty,
+		"totag":                    wecom.ToTag,
+		"article_title":            wecom.ArticleTitle,
+		"article_description":      wecom.ArticleDescription,
+		"article_url":              wecom.ArticleURL,
+		"article_picurl":           wecom.ArticlePicURL,
+		"article_button_text":      wecom.ArticleButtonText,
+		"mini_program_appid":       wecom.MiniProgramAppID,
+		"mini_program_pagepath":    wecom.MiniProgramPagePath,
+		"enable_duplicate_check":   wecom.EnableDuplicateCheck,
+		"duplicate_check_interval": wecom.DuplicateCheckInterval,
+		"api_base_url":             wecom.APIBaseURL,
 	}
 
 	out, err := yaml.Marshal(root)

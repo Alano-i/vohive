@@ -169,6 +169,7 @@ webhook:
 		BarkConfig{},
 		EmailConfig{},
 		PushplusConfig{},
+		WeComConfig{},
 	)
 	if err != nil {
 		t.Fatalf("UpdateNotificationInFile() error = %v", err)

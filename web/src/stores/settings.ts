@@ -11,7 +11,8 @@ import {
   type WebhookSettings,
   type BarkSettings,
   type TestBarkResponse,
-  type TestEmailResponse
+  type TestEmailResponse,
+  type TestWeComResponse
 } from '../services/system'
 
 const DEFAULT_SYSTEM_INFO: SystemInfo = {
@@ -73,6 +74,26 @@ type PushplusForm = {
   channel: string
 }
 
+type WeComForm = {
+  enabled: boolean
+  api_base_url: string
+  corp_id: string
+  corp_secret: string
+  agent_id: number | null
+  touser: string
+  toparty: string
+  totag: string
+  article_title: string
+  article_description: string
+  article_url: string
+  article_picurl: string
+  article_button_text: string
+  mini_program_appid: string
+  mini_program_pagepath: string
+  enable_duplicate_check: boolean
+  duplicate_check_interval: number
+}
+
 const DEFAULT_PASSWORD_FORM: PasswordForm = {
   old_password: '',
   new_password: '',
@@ -121,6 +142,26 @@ const DEFAULT_PUSHPLUS_FORM: PushplusForm = {
   channel: 'wechat'
 }
 
+const DEFAULT_WECOM_FORM: WeComForm = {
+  enabled: false,
+  api_base_url: 'https://qyapi.weixin.qq.com',
+  corp_id: '',
+  corp_secret: '',
+  agent_id: null,
+  touser: '@all',
+  toparty: '',
+  totag: '',
+  article_title: 'VoHive 通知',
+  article_description: '{{text}}',
+  article_url: '',
+  article_picurl: '',
+  article_button_text: '查看详情',
+  mini_program_appid: '',
+  mini_program_pagepath: '',
+  enable_duplicate_check: false,
+  duplicate_check_interval: 1800
+}
+
 const DEFAULT_WEBHOOK_SETTINGS: WebhookSettings = {
   enabled: false,
   urls: [],
@@ -165,6 +206,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const barkSettings = ref<BarkSettings>({ ...DEFAULT_BARK_SETTINGS })
   const emailForm = ref<EmailForm>({ ...DEFAULT_EMAIL_FORM })
   const pushplusForm = ref<PushplusForm>({ ...DEFAULT_PUSHPLUS_FORM })
+  const wecomForm = ref<WeComForm>({ ...DEFAULT_WECOM_FORM })
 
   const loadingSystemInfo = ref(false)
   const loadingNotifications = ref(false)
@@ -172,6 +214,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const testingWebhook = ref(false)
   const testingBark = ref(false)
   const testingEmail = ref(false)
+  const testingWeCom = ref(false)
   const changingPassword = ref(false)
 
   const error = ref<AppError | null>(null)
@@ -254,6 +297,26 @@ export const useSettingsStore = defineStore('settings', () => {
         topic: pushplus.topic || '',
         channel: pushplus.channel || 'wechat'
       }
+      const wecom = result.data.wecom || {}
+      wecomForm.value = {
+        enabled: !!wecom.enabled,
+        api_base_url: wecom.api_base_url || 'https://qyapi.weixin.qq.com',
+        corp_id: wecom.corp_id || '',
+        corp_secret: wecom.corp_secret || '',
+        agent_id: wecom.agent_id ?? null,
+        touser: wecom.touser || '@all',
+        toparty: wecom.toparty || '',
+        totag: wecom.totag || '',
+        article_title: wecom.article_title || 'VoHive 通知',
+        article_description: wecom.article_description || '{{text}}',
+        article_url: wecom.article_url || '',
+        article_picurl: wecom.article_picurl || '',
+        article_button_text: wecom.article_button_text || '查看详情',
+        mini_program_appid: wecom.mini_program_appid || '',
+        mini_program_pagepath: wecom.mini_program_pagepath || '',
+        enable_duplicate_check: !!wecom.enable_duplicate_check,
+        duplicate_check_interval: Number(wecom.duplicate_check_interval) || 1800
+      }
       error.value = null
     } else {
       error.value = result.error
@@ -314,6 +377,25 @@ export const useSettingsStore = defineStore('settings', () => {
         token: pushplusForm.value.token || '',
         topic: pushplusForm.value.topic || '',
         channel: pushplusForm.value.channel || ''
+      },
+      wecom: {
+        enabled: !!wecomForm.value.enabled,
+        api_base_url: String(wecomForm.value.api_base_url || '').trim(),
+        corp_id: String(wecomForm.value.corp_id || '').trim(),
+        corp_secret: String(wecomForm.value.corp_secret || '').trim(),
+        agent_id: Number(wecomForm.value.agent_id) || 0,
+        touser: String(wecomForm.value.touser || '').trim(),
+        toparty: String(wecomForm.value.toparty || '').trim(),
+        totag: String(wecomForm.value.totag || '').trim(),
+        article_title: String(wecomForm.value.article_title || '').trim(),
+        article_description: String(wecomForm.value.article_description || '').trim(),
+        article_url: String(wecomForm.value.article_url || '').trim(),
+        article_picurl: String(wecomForm.value.article_picurl || '').trim(),
+        article_button_text: String(wecomForm.value.article_button_text || '').trim(),
+        mini_program_appid: String(wecomForm.value.mini_program_appid || '').trim(),
+        mini_program_pagepath: String(wecomForm.value.mini_program_pagepath || '').trim(),
+        enable_duplicate_check: !!wecomForm.value.enable_duplicate_check,
+        duplicate_check_interval: Number(wecomForm.value.duplicate_check_interval) || 1800
       },
       webhook: {
         enabled: !!webhookSettings.value.enabled,
@@ -400,6 +482,16 @@ export const useSettingsStore = defineStore('settings', () => {
     return result as { ok: true; data: TestEmailResponse } | { ok: false; error: AppError }
   }
 
+  async function testWeComFromForm() {
+    testingWeCom.value = true
+    const result = await systemService.testWeCom(buildNotificationsPayload().wecom)
+    if (!result.ok) {
+      error.value = result.error
+    }
+    testingWeCom.value = false
+    return result as { ok: true; data: TestWeComResponse } | { ok: false; error: AppError }
+  }
+
   async function changePassword(payload: { old_password: string; new_password: string; confirm_password: string }) {
     changingPassword.value = true
     const result = await systemService.changePassword(payload)
@@ -429,12 +521,14 @@ export const useSettingsStore = defineStore('settings', () => {
     barkSettings,
     emailForm,
     pushplusForm,
+    wecomForm,
     loadingSystemInfo,
     loadingNotifications,
     savingNotifications,
     testingWebhook,
     testingBark,
     testingEmail,
+    testingWeCom,
     changingPassword,
     error,
     fetchSystemInfo,
@@ -444,6 +538,7 @@ export const useSettingsStore = defineStore('settings', () => {
     testWebhookFromForm,
     testBarkFromForm,
     testEmailFromForm,
+    testWeComFromForm,
     changePassword,
     changePasswordFromForm,
     resetPasswordForm

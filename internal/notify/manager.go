@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iniwex5/vohive/internal/config"
+	"github.com/iniwex5/vohive/internal/db"
 	"github.com/iniwex5/vohive/internal/device"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
@@ -20,11 +21,15 @@ type Manager struct {
 }
 
 type NotificationContext struct {
-	Event      string
-	Text       string
-	DeviceID   string
-	DeviceName string
-	Timestamp  time.Time
+	Event       string
+	Text        string
+	DeviceID    string
+	DeviceName  string
+	SMSSender   string
+	SMSReceiver string
+	SMSText     string
+	SMSSource   string
+	Timestamp   time.Time
 }
 
 func (c NotificationContext) DeviceLabel() string {
@@ -148,6 +153,18 @@ func (m *Manager) initChannels(cfg *config.Config) error {
 		}
 	}
 
+	// 企业微信应用渠道
+	if cfg.WeCom.Enabled {
+		wc, err := NewWeComChannel(cfg.WeCom)
+		if err != nil {
+			logger.Error("初始化企业微信应用通知渠道失败", "err", err)
+			return err
+		}
+		if wc != nil {
+			m.channels = append(m.channels, wc)
+		}
+	}
+
 	// 向所有渠道注册命令
 	m.registerCommands()
 
@@ -267,11 +284,15 @@ func (m *Manager) NotifySMSWithSource(deviceID, sender, content, source string, 
 		"channel_count", len(m.channels))
 
 	m.broadcastWithContext(NotificationContext{
-		Event:      "sms_received",
-		Text:       msg,
-		DeviceID:   deviceID,
-		DeviceName: m.resolveDeviceName(deviceID),
-		Timestamp:  timestamp,
+		Event:       "sms_received",
+		Text:        msg,
+		DeviceID:    deviceID,
+		DeviceName:  m.resolveDeviceName(deviceID),
+		SMSSender:   sender,
+		SMSReceiver: m.resolveDevicePhoneNumber(deviceID),
+		SMSText:     content,
+		SMSSource:   source,
+		Timestamp:   timestamp,
 	})
 }
 
@@ -331,6 +352,25 @@ func (m *Manager) resolveDeviceName(deviceID string) string {
 		return ""
 	}
 	return strings.TrimSpace(worker.Config.Name)
+}
+
+func (m *Manager) resolveDevicePhoneNumber(deviceID string) string {
+	if strings.TrimSpace(deviceID) == "" || m.pool == nil {
+		return ""
+	}
+	worker := m.pool.GetWorker(deviceID)
+	if worker == nil {
+		return ""
+	}
+	imsi := strings.TrimSpace(worker.GetIMSI())
+	if imsi == "" {
+		return ""
+	}
+	phone, err := db.GetSIMCardPhoneNumberByIMSI(imsi)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(phone)
 }
 
 func (m *Manager) broadcastWithContext(ctx NotificationContext) {

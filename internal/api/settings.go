@@ -69,6 +69,25 @@ type notificationSettingsResponse struct {
 		Topic   string `json:"topic"`
 		Channel string `json:"channel"`
 	} `json:"pushplus"`
+	WeCom struct {
+		Enabled                bool   `json:"enabled"`
+		CorpID                 string `json:"corp_id"`
+		CorpSecret             string `json:"corp_secret"`
+		AgentID                int64  `json:"agent_id"`
+		ToUser                 string `json:"touser"`
+		ToParty                string `json:"toparty"`
+		ToTag                  string `json:"totag"`
+		ArticleTitle           string `json:"article_title"`
+		ArticleDescription     string `json:"article_description"`
+		ArticleURL             string `json:"article_url"`
+		ArticlePicURL          string `json:"article_picurl"`
+		ArticleButtonText      string `json:"article_button_text"`
+		MiniProgramAppID       string `json:"mini_program_appid"`
+		MiniProgramPagePath    string `json:"mini_program_pagepath"`
+		EnableDuplicateCheck   bool   `json:"enable_duplicate_check"`
+		DuplicateCheckInterval int    `json:"duplicate_check_interval"`
+		APIBaseURL             string `json:"api_base_url"`
+	} `json:"wecom"`
 }
 
 type updateNotificationSettingsRequest struct {
@@ -126,6 +145,25 @@ type updateNotificationSettingsRequest struct {
 		Topic   string `json:"topic"`
 		Channel string `json:"channel"`
 	} `json:"pushplus"`
+	WeCom struct {
+		Enabled                bool   `json:"enabled"`
+		CorpID                 string `json:"corp_id"`
+		CorpSecret             string `json:"corp_secret"`
+		AgentID                int64  `json:"agent_id"`
+		ToUser                 string `json:"touser"`
+		ToParty                string `json:"toparty"`
+		ToTag                  string `json:"totag"`
+		ArticleTitle           string `json:"article_title"`
+		ArticleDescription     string `json:"article_description"`
+		ArticleURL             string `json:"article_url"`
+		ArticlePicURL          string `json:"article_picurl"`
+		ArticleButtonText      string `json:"article_button_text"`
+		MiniProgramAppID       string `json:"mini_program_appid"`
+		MiniProgramPagePath    string `json:"mini_program_pagepath"`
+		EnableDuplicateCheck   bool   `json:"enable_duplicate_check"`
+		DuplicateCheckInterval int    `json:"duplicate_check_interval"`
+		APIBaseURL             string `json:"api_base_url"`
+	} `json:"wecom"`
 }
 
 func (s *Server) handleGetNotificationSettings(c *gin.Context) {
@@ -174,6 +212,26 @@ func (s *Server) handleGetNotificationSettings(c *gin.Context) {
 	resp.Pushplus.Token = s.fullCfg.Pushplus.Token
 	resp.Pushplus.Topic = s.fullCfg.Pushplus.Topic
 	resp.Pushplus.Channel = s.fullCfg.Pushplus.Channel
+	resp.WeCom.Enabled = s.fullCfg.WeCom.Enabled
+	resp.WeCom.CorpID = s.fullCfg.WeCom.CorpID
+	resp.WeCom.CorpSecret = s.fullCfg.WeCom.CorpSecret
+	resp.WeCom.AgentID = s.fullCfg.WeCom.AgentID
+	resp.WeCom.ToUser = s.fullCfg.WeCom.ToUser
+	resp.WeCom.ToParty = s.fullCfg.WeCom.ToParty
+	resp.WeCom.ToTag = s.fullCfg.WeCom.ToTag
+	resp.WeCom.ArticleTitle = s.fullCfg.WeCom.ArticleTitle
+	resp.WeCom.ArticleDescription = s.fullCfg.WeCom.ArticleDescription
+	resp.WeCom.ArticleURL = s.fullCfg.WeCom.ArticleURL
+	resp.WeCom.ArticlePicURL = s.fullCfg.WeCom.ArticlePicURL
+	resp.WeCom.ArticleButtonText = s.fullCfg.WeCom.ArticleButtonText
+	resp.WeCom.MiniProgramAppID = s.fullCfg.WeCom.MiniProgramAppID
+	resp.WeCom.MiniProgramPagePath = s.fullCfg.WeCom.MiniProgramPagePath
+	resp.WeCom.EnableDuplicateCheck = s.fullCfg.WeCom.EnableDuplicateCheck
+	resp.WeCom.DuplicateCheckInterval = s.fullCfg.WeCom.DuplicateCheckInterval
+	resp.WeCom.APIBaseURL = strings.TrimSpace(s.fullCfg.WeCom.APIBaseURL)
+	if resp.WeCom.APIBaseURL == "" {
+		resp.WeCom.APIBaseURL = config.DefaultWeComAPIBaseURL
+	}
 
 	c.JSON(http.StatusOK, resp)
 }
@@ -278,6 +336,26 @@ func (s *Server) handleUpdateNotificationSettings(c *gin.Context) {
 		Channel: strings.TrimSpace(req.Pushplus.Channel),
 	}
 
+	wc := config.WeComConfig{
+		Enabled:                req.WeCom.Enabled,
+		CorpID:                 strings.TrimSpace(req.WeCom.CorpID),
+		CorpSecret:             strings.TrimSpace(req.WeCom.CorpSecret),
+		AgentID:                req.WeCom.AgentID,
+		ToUser:                 strings.TrimSpace(req.WeCom.ToUser),
+		ToParty:                strings.TrimSpace(req.WeCom.ToParty),
+		ToTag:                  strings.TrimSpace(req.WeCom.ToTag),
+		ArticleTitle:           strings.TrimSpace(req.WeCom.ArticleTitle),
+		ArticleDescription:     strings.TrimSpace(req.WeCom.ArticleDescription),
+		ArticleURL:             strings.TrimSpace(req.WeCom.ArticleURL),
+		ArticlePicURL:          strings.TrimSpace(req.WeCom.ArticlePicURL),
+		ArticleButtonText:      strings.TrimSpace(req.WeCom.ArticleButtonText),
+		MiniProgramAppID:       strings.TrimSpace(req.WeCom.MiniProgramAppID),
+		MiniProgramPagePath:    strings.TrimSpace(req.WeCom.MiniProgramPagePath),
+		EnableDuplicateCheck:   req.WeCom.EnableDuplicateCheck,
+		DuplicateCheckInterval: req.WeCom.DuplicateCheckInterval,
+		APIBaseURL:             strings.TrimSpace(req.WeCom.APIBaseURL),
+	}
+
 	if tg.Enabled {
 		if tg.BotToken == "" || tg.ChatID == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Telegram 启用时必须填写 bot_token 与 chat_id"})
@@ -319,7 +397,18 @@ func (s *Server) handleUpdateNotificationSettings(c *gin.Context) {
 		return
 	}
 
-	if err := config.UpdateNotificationInFile(s.configPath, tg, fs, qq, wh, barkCfg, em, pp); err != nil {
+	if wc.Enabled {
+		if wc.CorpID == "" || wc.CorpSecret == "" || wc.AgentID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "企业微信应用通知启用时必须填写 CorpID、CorpSecret 与 AgentID"})
+			return
+		}
+		if wc.ToUser == "" && wc.ToParty == "" && wc.ToTag == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "企业微信应用通知启用时必须填写 touser、toparty 或 totag"})
+			return
+		}
+	}
+
+	if err := config.UpdateNotificationInFile(s.configPath, tg, fs, qq, wh, barkCfg, em, pp, wc); err != nil {
 		logger.Error("写入通知配置失败", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "写入配置文件失败: " + err.Error()})
 		return
@@ -332,6 +421,7 @@ func (s *Server) handleUpdateNotificationSettings(c *gin.Context) {
 	s.fullCfg.Bark = barkCfg
 	s.fullCfg.Email = em
 	s.fullCfg.Pushplus = pp
+	s.fullCfg.WeCom = wc
 
 	if s.notifyMgr != nil {
 		if err := s.notifyMgr.UpdateConfig(s.fullCfg); err != nil {

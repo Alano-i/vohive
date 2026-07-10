@@ -85,12 +85,33 @@ export type PushplusSettings = {
   channel: string
 }
 
+export type WeComSettings = {
+  enabled: boolean
+  corp_id: string
+  corp_secret: string
+  agent_id: number
+  touser: string
+  toparty: string
+  totag: string
+  article_title: string
+  article_description: string
+  article_url: string
+  article_picurl: string
+  article_button_text: string
+  mini_program_appid: string
+  mini_program_pagepath: string
+  enable_duplicate_check: boolean
+  duplicate_check_interval: number
+  api_base_url: string
+}
+
 export type NotificationsSettingsResponse = {
   telegram?: Partial<TelegramSettings>
   feishu?: Partial<FeishuSettings>
   qq?: Partial<QQSettings>
   email?: Partial<EmailSettings>
   pushplus?: Partial<PushplusSettings>
+  wecom?: Partial<WeComSettings>
   webhook?: Partial<WebhookSettings>
   bark?: Partial<BarkSettings>
 }
@@ -132,6 +153,25 @@ export type SaveNotificationsPayload = {
     token: string
     topic: string
     channel: string
+  }
+  wecom: {
+    enabled: boolean
+    corp_id: string
+    corp_secret: string
+    agent_id: number
+    touser: string
+    toparty: string
+    totag: string
+    article_title: string
+    article_description: string
+    article_url: string
+    article_picurl: string
+    article_button_text: string
+    mini_program_appid: string
+    mini_program_pagepath: string
+    enable_duplicate_check: boolean
+    duplicate_check_interval: number
+    api_base_url: string
   }
   webhook: {
     enabled: boolean
@@ -202,6 +242,15 @@ export type TestEmailResponse = {
   message: string
 }
 
+export type TestWeComPayload = SaveNotificationsPayload['wecom']
+
+export type TestWeComResponse = {
+  ok: boolean
+  message: string
+  errcode?: number
+  errmsg?: string
+}
+
 export const systemService = {
   getInfo() {
     return callService(async () => {
@@ -245,6 +294,12 @@ export const systemService = {
   testEmail(payload: TestEmailPayload) {
     return callService(async () => {
       const res = await api.post<TestEmailResponse>('/settings/notifications/email/test', payload)
+      return res.data
+    })
+  },
+  testWeCom(payload: TestWeComPayload) {
+    return callService(async () => {
+      const res = await api.post<TestWeComResponse>('/settings/notifications/wecom/test', payload)
       return res.data
     })
   },

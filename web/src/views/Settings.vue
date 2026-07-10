@@ -16,7 +16,7 @@ import {
 } from '@vicons/fluent'
 
 const settingsStore = useSettingsStore()
-const { systemInfo, loadingNotifications, savingNotifications, testingWebhook, testingBark, testingEmail, changingPassword, passwordForm, telegramForm, feishuForm, qqForm, webhookSettings, barkSettings, emailForm, pushplusForm } = storeToRefs(settingsStore)
+const { systemInfo, loadingNotifications, savingNotifications, testingWebhook, testingBark, testingEmail, testingWeCom, changingPassword, passwordForm, telegramForm, feishuForm, qqForm, webhookSettings, barkSettings, emailForm, pushplusForm, wecomForm } = storeToRefs(settingsStore)
 const activeNotifyTab = ref('telegram')
 
 
@@ -43,6 +43,15 @@ const hasValidEmailConfig = computed(() => {
     emailForm.value.password &&
     emailForm.value.from_address &&
     emailForm.value.to_addresses
+  )
+})
+
+const hasValidWeComConfig = computed(() => {
+  return !!(
+    wecomForm.value.corp_id &&
+    wecomForm.value.corp_secret &&
+    wecomForm.value.agent_id &&
+    (wecomForm.value.touser || wecomForm.value.toparty || wecomForm.value.totag)
   )
 })
 
@@ -224,6 +233,23 @@ async function testEmailNotification() {
     ElMessage.error(data.message || 'Email 测试失败')
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : 'Email 测试失败')
+  }
+}
+
+async function testWeComNotification() {
+  try {
+    const result = await settingsStore.testWeComFromForm()
+    if (!result.ok) {
+      throw new Error(result.error.message || '企业微信测试失败')
+    }
+    const data = result.data
+    if (data.ok) {
+      ElMessage.success(data.message || '测试通知已发送')
+      return
+    }
+    ElMessage.error(data.message || '企业微信测试失败')
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '企业微信测试失败')
   }
 }
 
@@ -442,7 +468,7 @@ onBeforeUnmount(() => {
                </div>
                <div>
                   <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">通知</h3>
-                  <p class="text-xs text-gray-500">Telegram / 飞书 / QQ / Webhook</p>
+                  <p class="text-xs text-gray-500">Telegram / 飞书 / QQ / 企业微信 / Webhook</p>
                </div>
             </div>
             <el-button type="primary" :loading="savingNotifications" :disabled="loadingNotifications" @click="saveNotifications" class="!border-0">
@@ -718,6 +744,145 @@ onBeforeUnmount(() => {
                       <el-option label="企业微信 (cp)" value="cp" />
                       <el-option label="邮件 (mail)" value="mail" />
                     </el-select>
+                  </div>
+                </div>
+              </el-tab-pane>
+
+              <!-- 企业微信应用 -->
+              <el-tab-pane label="企业微信应用" name="wecom" class="pt-2">
+                <div class="flex items-center justify-between mb-4">
+                  <div class="flex items-center gap-2">
+                    <div class="font-bold text-gray-800 dark:text-gray-100">启用企业微信应用通知</div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      :loading="testingWeCom"
+                      :disabled="!wecomForm.enabled || !hasValidWeComConfig"
+                      @click="testWeComNotification"
+                    >
+                      测试通知
+                    </el-button>
+                    <el-switch v-model="wecomForm.enabled" />
+                  </div>
+                </div>
+
+                <div class="space-y-4">
+                  <div class="space-y-1">
+                    <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">API Base URL</label>
+                    <el-input v-model="wecomForm.api_base_url" :disabled="!wecomForm.enabled" placeholder="https://qyapi.weixin.qq.com" />
+                    <div class="text-[10px] text-gray-400 mt-1">留空时使用企业微信官方接口，可填写代理地址。</div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">CorpID</label>
+                      <el-input v-model="wecomForm.corp_id" :disabled="!wecomForm.enabled" placeholder="企业 ID" />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">CorpSecret</label>
+                      <el-input v-model="wecomForm.corp_secret" :disabled="!wecomForm.enabled" type="password" show-password placeholder="应用 Secret" />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">AgentId</label>
+                      <el-input v-model="wecomForm.agent_id" :disabled="!wecomForm.enabled" type="number" inputmode="numeric" placeholder="应用 AgentId" />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">ToUser</label>
+                      <el-input v-model="wecomForm.touser" :disabled="!wecomForm.enabled" placeholder="@all 或 UserID1|UserID2" />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">ToParty</label>
+                      <el-input v-model="wecomForm.toparty" :disabled="!wecomForm.enabled" placeholder="部门 ID，多个用 | 分隔" />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">ToTag</label>
+                      <el-input v-model="wecomForm.totag" :disabled="!wecomForm.enabled" placeholder="标签 ID，多个用 | 分隔" />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">图文标题</label>
+                      <el-input v-model="wecomForm.article_title" :disabled="!wecomForm.enabled" placeholder="VoHive 通知" />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">按钮文字</label>
+                      <el-input v-model="wecomForm.article_button_text" :disabled="!wecomForm.enabled" placeholder="查看详情" />
+                    </div>
+                  </div>
+
+                  <div class="space-y-1">
+                    <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">图文描述</label>
+                    <el-input
+                      v-model="wecomForm.article_description"
+                      :disabled="!wecomForm.enabled"
+                      type="textarea"
+                      :rows="2"
+                      placeholder="{{text}}"
+                    />
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">跳转 URL</label>
+                      <el-input v-model="wecomForm.article_url" :disabled="!wecomForm.enabled" placeholder="https://..." />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">封面 URL</label>
+                      <el-input v-model="wecomForm.article_picurl" :disabled="!wecomForm.enabled" placeholder="https://.../cover.png" />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">小程序 AppID</label>
+                      <el-input v-model="wecomForm.mini_program_appid" :disabled="!wecomForm.enabled" placeholder="可选" />
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">小程序路径</label>
+                      <el-input v-model="wecomForm.mini_program_pagepath" :disabled="!wecomForm.enabled" placeholder="pages/index" />
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider block">启用重复消息检查</label>
+                      <div class="h-10 flex items-center">
+                        <el-switch v-model="wecomForm.enable_duplicate_check" :disabled="!wecomForm.enabled" />
+                      </div>
+                    </div>
+                    <div class="space-y-1">
+                      <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">重复检查间隔（秒）</label>
+                      <el-input-number
+                        v-model="wecomForm.duplicate_check_interval"
+                        :min="1"
+                        :max="14400"
+                        :disabled="!wecomForm.enabled || !wecomForm.enable_duplicate_check"
+                        class="w-full !w-full"
+                        controls-position="right"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="p-3 rounded-xl bg-indigo-50/50 dark:bg-indigo-500/5 text-xs text-indigo-600 dark:text-indigo-400/80 leading-relaxed border border-indigo-100/50 dark:border-indigo-500/10">
+                    <strong>占位变量说明：</strong>
+                    <ol class="list-decimal ml-4 mt-1 space-y-1">
+                      <li><code v-pre>{{text}}</code>：通知正文内容</li>
+                      <li><code v-pre>{{event}}</code>：通知事件类型</li>
+                      <li><code v-pre>{{timestamp}}</code>：通知时间，格式为 2026-07-15 15:35:15</li>
+                      <li><code v-pre>{{device_id}}</code>：设备 ID</li>
+                      <li><code v-pre>{{device_name}}</code>：设备名称</li>
+                      <li><code v-pre>{{device_label}}</code>：设备名称和设备 ID 的组合显示</li>
+                      <li><code v-pre>{{sms_sender}}</code>：短信发送号码</li>
+                      <li><code v-pre>{{sms_receiver}}</code>：当前接收短信的本机号码</li>
+                      <li><code v-pre>{{sms_text}}</code>：收到短信的原始内容</li>
+                    </ol>
                   </div>
                 </div>
               </el-tab-pane>
