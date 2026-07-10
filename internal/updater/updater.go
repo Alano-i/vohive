@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	repoOwner = "iniwex5"
-	repoName  = "vohive-release"
+	repoOwner = "Alano-i"
+	repoName  = "vohive"
 )
 
 type Release struct {
@@ -39,12 +39,17 @@ type UpdateInfo struct {
 	LatestVer   string `json:"latest_version"`
 	ReleaseNote string `json:"release_note"`
 	IsDocker    bool   `json:"is_docker"`
+	Platform    string `json:"platform"`
+	AssetName   string `json:"asset_name"`
+	DownloadURL string `json:"download_url"`
 }
 
-// CheckUpdate 检查是否有新版本
-func CheckUpdate() (*UpdateInfo, error) {
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
+func latestReleaseURL() string {
+	return fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
+}
 
+func fetchLatestRelease() (*Release, error) {
+	apiURL := latestReleaseURL()
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -66,14 +71,59 @@ func CheckUpdate() (*UpdateInfo, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return nil, fmt.Errorf("decode response failed: %w", err)
 	}
+	return &release, nil
+}
 
-	currentVersion := global.Version
-	if !strings.HasPrefix(currentVersion, "v") {
-		currentVersion = "v" + currentVersion
+func normalizeVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return version
 	}
-	latestVersion := release.TagName
-	if !strings.HasPrefix(latestVersion, "v") {
-		latestVersion = "v" + latestVersion
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+	return version
+}
+
+func currentTargetPlatform() (string, string) {
+	return runtime.GOOS, releaseArch(runtime.GOARCH)
+}
+
+func releaseArch(goarch string) string {
+	if goarch == "arm" {
+		return "armv7"
+	}
+	return goarch
+}
+
+func releaseAssetName(version, goos, arch string) string {
+	return fmt.Sprintf("vohive_%s_%s_%s", version, goos, arch)
+}
+
+func findReleaseAsset(release *Release, goos, arch string) (Asset, error) {
+	version := normalizeVersion(release.TagName)
+	name := releaseAssetName(version, goos, arch)
+	for _, asset := range release.Assets {
+		if asset.Name == name {
+			return asset, nil
+		}
+	}
+	return Asset{}, fmt.Errorf("no matching asset found for platform %s/%s, want %s", goos, arch, name)
+}
+
+// CheckUpdate 检查是否有新版本
+func CheckUpdate() (*UpdateInfo, error) {
+	release, err := fetchLatestRelease()
+	if err != nil {
+		return nil, err
+	}
+
+	currentVersion := normalizeVersion(global.Version)
+	latestVersion := normalizeVersion(release.TagName)
+	targetGoos, targetArch := currentTargetPlatform()
+	asset, err := findReleaseAsset(release, targetGoos, targetArch)
+	if err != nil {
+		return nil, err
 	}
 
 	// 使用 semver 比较版本
@@ -100,51 +150,30 @@ func CheckUpdate() (*UpdateInfo, error) {
 		LatestVer:   latestVersion,
 		ReleaseNote: release.Body,
 		IsDocker:    isDocker,
+		Platform:    fmt.Sprintf("%s/%s", targetGoos, targetArch),
+		AssetName:   asset.Name,
+		DownloadURL: asset.BrowserDownloadURL,
 	}, nil
 }
 
 // ApplyUpdate 获取最新 release 并下载对应架构的二进制进行自我替换
 func ApplyUpdate() error {
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
-	client := &http.Client{Timeout: 15 * time.Second}
-
-	resp, err := client.Get(apiURL)
+	release, err := fetchLatestRelease()
 	if err != nil {
 		return fmt.Errorf("failed to fetch release info: %w", err)
 	}
-	defer resp.Body.Close()
 
-	var release Release
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return fmt.Errorf("failed to decode release info: %w", err)
+	targetGoos, targetArch := currentTargetPlatform()
+	asset, err := findReleaseAsset(release, targetGoos, targetArch)
+	if err != nil {
+		return err
 	}
 
-	// 拼接对应的 asset name。例如: vohive_v1.0.0_linux_amd64
-	targetGoos := runtime.GOOS
-	targetGoarch := runtime.GOARCH
-	if targetGoarch == "arm" {
-		targetGoarch = "armv7" // 根据 Makefile 中的定义，vohive 编的 arm 是 armv7
-	}
-
-	binaryName := "vohive"
-	assetPrefix := fmt.Sprintf("%s_%s_%s_%s", binaryName, release.TagName, targetGoos, targetGoarch)
-
-	var downloadURL string
-	for _, asset := range release.Assets {
-		if strings.HasPrefix(asset.Name, assetPrefix) {
-			downloadURL = asset.BrowserDownloadURL
-			break
-		}
-	}
-
-	if downloadURL == "" {
-		return fmt.Errorf("no matching asset found for architecture %s_%s", targetGoos, targetGoarch)
-	}
-
-	logger.Info("开始下载更新", "url", downloadURL)
+	logger.Info("开始下载更新", "asset", asset.Name, "url", asset.BrowserDownloadURL)
 
 	// 下载二进制
-	dlResp, err := http.Get(downloadURL)
+	client := &http.Client{Timeout: 5 * time.Minute}
+	dlResp, err := client.Get(asset.BrowserDownloadURL)
 	if err != nil {
 		return fmt.Errorf("failed to download update: %w", err)
 	}

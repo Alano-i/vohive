@@ -275,7 +275,7 @@ async function doApplyUpdate() {
 
   if (updateInfo.value.is_docker) {
     ElMessageBox.alert(
-      '检测到当前系统运行在 Docker 环境下。<br><br>不建议在 Docker 容器内直接执行文件热替换。请直接通过拉取最新镜像（如 <code>docker pull iniwex5/vohive:latest</code>）并重启容器来完成升级！',
+      '检测到当前系统运行在 Docker 环境下。<br><br>不建议在 Docker 容器内直接执行文件热替换。请按当前部署方式拉取最新镜像并重启容器来完成升级。',
       '环境警告',
       { dangerouslyUseHTMLString: true, type: 'warning' }
     )
@@ -284,7 +284,7 @@ async function doApplyUpdate() {
 
   try {
     await ElMessageBox.confirm(
-      `最新版本：${updateInfo.value.latest_version}，确定要现在更新并重启服务吗？<br><br><pre style="white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow-y: auto; background: var(--el-fill-color-light); padding: 8px; border-radius: 4px; margin-top: 8px;">${updateInfo.value.release_note}</pre>`,
+      `最新版本：${updateInfo.value.latest_version}<br>当前平台：${updateInfo.value.platform || 'Unknown'}<br>更新包：${updateInfo.value.asset_name || 'Unknown'}<br><br>确定要现在更新并重启服务吗？<br><br><pre style="white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow-y: auto; background: var(--el-fill-color-light); padding: 8px; border-radius: 4px; margin-top: 8px;">${updateInfo.value.release_note}</pre>`,
       '应用更新',
       { dangerouslyUseHTMLString: true, confirmButtonText: '立即更新', cancelButtonText: '取消', type: 'warning' }
     )
@@ -384,6 +384,9 @@ onBeforeUnmount(() => {
             <div v-if="updateInfo?.has_update" class="p-4 bg-amber-50 dark:bg-amber-500/10 rounded-lg border border-amber-200 dark:border-amber-500/20">
                <div class="flex items-center gap-2 text-amber-800 dark:text-amber-200 mb-2 font-bold text-[13px]">
                  <el-icon><Alert24Regular /></el-icon>发现新版本: {{ updateInfo.latest_version }}
+               </div>
+               <div class="text-xs text-amber-800 dark:text-amber-200 mb-2">
+                 当前平台: {{ updateInfo.platform || 'Unknown' }} · 更新包: {{ updateInfo.asset_name || 'Unknown' }}
                </div>
                <div class="text-xs text-amber-700 dark:text-amber-300/80 mb-4 whitespace-pre-wrap max-h-32 overflow-y-auto pr-2 custom-scrollbar">
                  {{ updateInfo.release_note || '暂无更新说明' }}

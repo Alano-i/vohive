@@ -13,6 +13,9 @@ export type UpdateInfo = {
   latest_version: string
   release_note: string
   is_docker: boolean
+  platform: string
+  asset_name: string
+  download_url: string
 }
 
 export type SystemInfo = {
