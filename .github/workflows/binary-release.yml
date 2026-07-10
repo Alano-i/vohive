@@ -193,10 +193,9 @@ jobs:
       - name: Add installer scripts
         shell: bash
         run: |
-          cp scripts/install-debian-oneclick.sh dist/install-debian-oneclick.sh
+          cp scripts/install.sh dist/install.sh
           cp scripts/install-debian-binary.sh dist/install-debian-binary.sh
-          cp scripts/install-debian-oneclick.sh dist/install.sh
-          chmod 0755 dist/install-debian-oneclick.sh dist/install-debian-binary.sh dist/install.sh
+          chmod 0755 dist/install.sh dist/install-debian-binary.sh
 
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2

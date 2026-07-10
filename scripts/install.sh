@@ -8,14 +8,14 @@ VERSION="${VOHIVE_VERSION:-}"
 usage() {
 	cat <<EOF
 Usage:
-  sudo sh scripts/install-debian-oneclick.sh [--version vX.Y.Z] [--repo owner/repo]
+  sudo sh scripts/install.sh [--version vX.Y.Z] [--repo owner/repo]
 
 Environment:
   VOHIVE_VERSION   Release tag to install. Defaults to latest GitHub release.
   VOHIVE_REPO      GitHub repo. Defaults to ${REPO}.
 
 One-line install:
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install-debian-oneclick.sh | sudo sh
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | sudo sh
 EOF
 }
 
