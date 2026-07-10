@@ -1,9 +1,9 @@
 # 构建阶段 1: 前端构建 (Frontend)
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/web
-COPY go-4gproxy/web/package*.json ./
+COPY web/package*.json ./
 RUN npm ci
-COPY go-4gproxy/web/ .
+COPY web/ .
 RUN npm run build
 
 # 构建阶段 2: 后端构建 (Backend)
@@ -23,12 +23,15 @@ RUN apk add --no-cache git
 RUN if [ -n "${GH_PAT}" ]; then git config --global url."https://x-access-token:${GH_PAT}@github.com/iniwex5/".insteadOf "https://github.com/iniwex5/"; fi
 
 # 复制 go mod 文件
-COPY go-4gproxy/go.mod go-4gproxy/go.sum ./
+COPY go.mod go.sum ./
+
+# 本地化的模块 replace 需要在 go mod download 前可见。
+COPY third_party ./third_party
 
 RUN go mod download
 
 # 复制源代码 (不包含 internal/web/dist，这将在下一步从前端构建阶段复制)
-COPY go-4gproxy/ .
+COPY . .
 
 # 复制构建好的前端资源到 internal/web/dist 以便嵌入
 # 必须在 go build 之前完成

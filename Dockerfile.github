@@ -35,6 +35,9 @@ RUN apk add --no-cache git
 # 复制 go mod 文件
 COPY go.mod go.sum ./
 
+# 本地化的模块 replace 需要在 go mod download 前可见。
+COPY third_party ./third_party
+
 # 挂载 Go 模块缓存，加速依赖下载
 ARG TARGETOS
 ARG TARGETARCH

@@ -7,6 +7,14 @@ VERSION_TAG = $(if $(filter v%,$(VERSION)),$(VERSION),v$(VERSION))
 BUILD_TIME ?= $(shell date "+%Y-%m-%d %H:%M:%S")
 DIST_DIR ?= dist
 MAIN_PACKAGE ?= ./cmd/vohive
+LOCAL_MODULE_DIRS = \
+	third_party/euicc-go \
+	third_party/uicc-go \
+	third_party/netlink \
+	third_party/qqbot \
+	third_party/quectel-qmi-go \
+	third_party/swu-go \
+	third_party/vowifi-go
 
 LDFLAGS = -s -w -X 'github.com/iniwex5/vohive/internal/global.Version=$(VERSION)' -X 'github.com/iniwex5/vohive/internal/global.BuildTime=$(BUILD_TIME)'
 GO_BUILD = go build -trimpath -buildvcs=false -tags "$(GO_TAGS)" -ldflags "$(LDFLAGS)"
@@ -17,13 +25,18 @@ ARMV7_OUT = $(DIST_DIR)/$(BINARY_NAME)_$(VERSION_TAG)_linux_armv7
 UPX ?= $(shell command -v upx || command -v upx-ucl)
 UPX_FLAGS ?= --best --lzma
 
-.PHONY: all build build-amd64 build-arm64 build-armv7 build-all frontend-dist clean
+.PHONY: all build build-amd64 build-arm64 build-armv7 build-all check-local-modules frontend-dist clean
 
 all: build-all
 
 build: build-amd64
 
 build-all: build-amd64 build-arm64 build-armv7
+
+check-local-modules:
+	@for dir in $(LOCAL_MODULE_DIRS); do \
+		test -f "$$dir/go.mod" || { echo "错误: 缺少本地化模块 $$dir"; exit 1; }; \
+	done
 
 frontend-dist:
 	npm ci --prefix web
@@ -32,19 +45,19 @@ frontend-dist:
 	mkdir -p internal/web
 	cp -R web/dist internal/web/dist
 
-build-amd64: frontend-dist
+build-amd64: check-local-modules frontend-dist
 	@test -n "$(UPX)" || { echo "错误: 需要安装 upx"; exit 1; }
 	mkdir -p $(DIST_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=amd64 $(GO_BUILD) -o $(AMD64_OUT) $(MAIN_PACKAGE)
 	$(UPX) $(UPX_FLAGS) $(AMD64_OUT)
 
-build-arm64: frontend-dist
+build-arm64: check-local-modules frontend-dist
 	@test -n "$(UPX)" || { echo "错误: 需要安装 upx"; exit 1; }
 	mkdir -p $(DIST_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=arm64 $(GO_BUILD) -o $(ARM64_OUT) $(MAIN_PACKAGE)
 	$(UPX) $(UPX_FLAGS) $(ARM64_OUT)
 
-build-armv7: frontend-dist
+build-armv7: check-local-modules frontend-dist
 	@test -n "$(UPX)" || { echo "错误: 需要安装 upx"; exit 1; }
 	mkdir -p $(DIST_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=arm GOARM=7 $(GO_BUILD) -o $(ARMV7_OUT) $(MAIN_PACKAGE)
