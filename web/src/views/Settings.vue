@@ -809,11 +809,11 @@ onBeforeUnmount(() => {
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div class="space-y-1">
                       <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">图文标题</label>
-                      <el-input v-model="wecomForm.article_title" :disabled="!wecomForm.enabled" placeholder="VoHive 通知" />
+                      <el-input v-model="wecomForm.article_title" :disabled="!wecomForm.enabled" placeholder="{{sms_receiver}} 收到新短信" />
                     </div>
                     <div class="space-y-1">
                       <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">按钮文字</label>
-                      <el-input v-model="wecomForm.article_button_text" :disabled="!wecomForm.enabled" placeholder="查看详情" />
+                      <el-input v-model="wecomForm.article_button_text" :disabled="!wecomForm.enabled" placeholder="可选" />
                     </div>
                   </div>
 
@@ -824,7 +824,7 @@ onBeforeUnmount(() => {
                       :disabled="!wecomForm.enabled"
                       type="textarea"
                       :rows="2"
-                      placeholder="{{text}}"
+                      :placeholder="'发自{{sms_sender}}\n{{timestamp}}'"
                     />
                   </div>
 
@@ -835,7 +835,7 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="space-y-1">
                       <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">封面 URL</label>
-                      <el-input v-model="wecomForm.article_picurl" :disabled="!wecomForm.enabled" placeholder="https://.../cover.png" />
+                      <el-input v-model="wecomForm.article_picurl" :disabled="!wecomForm.enabled" placeholder="https://img.andp.cc/icons/upload/sms.png" />
                     </div>
                   </div>
 

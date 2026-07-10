@@ -103,16 +103,19 @@ func normalizeWeComConfig(cfg *config.WeComConfig) {
 	cfg.MiniProgramPagePath = strings.TrimSpace(cfg.MiniProgramPagePath)
 	cfg.APIBaseURL = strings.TrimRight(strings.TrimSpace(cfg.APIBaseURL), "/")
 	if cfg.ArticleTitle == "" {
-		cfg.ArticleTitle = "VoHive 通知"
+		cfg.ArticleTitle = config.DefaultWeComArticleTitle
 	}
 	if cfg.ArticleDescription == "" {
-		cfg.ArticleDescription = "{{text}}"
+		cfg.ArticleDescription = config.DefaultWeComArticleDescription
+	}
+	if cfg.ArticlePicURL == "" {
+		cfg.ArticlePicURL = config.DefaultWeComArticlePicURL
 	}
 	if cfg.APIBaseURL == "" {
 		cfg.APIBaseURL = config.DefaultWeComAPIBaseURL
 	}
 	if cfg.DuplicateCheckInterval <= 0 {
-		cfg.DuplicateCheckInterval = 1800
+		cfg.DuplicateCheckInterval = config.DefaultWeComDuplicateCheckSeconds
 	}
 }
 

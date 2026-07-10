@@ -241,7 +241,13 @@ type PushplusConfig struct {
 	Channel string `mapstructure:"channel"`
 }
 
-const DefaultWeComAPIBaseURL = "https://qyapi.weixin.qq.com"
+const (
+	DefaultWeComAPIBaseURL            = "https://qyapi.weixin.qq.com"
+	DefaultWeComArticleTitle          = "{{sms_receiver}} 收到新短信"
+	DefaultWeComArticleDescription    = "发自{{sms_sender}}\n{{timestamp}}"
+	DefaultWeComArticlePicURL         = "https://img.andp.cc/icons/upload/sms.png"
+	DefaultWeComDuplicateCheckSeconds = 1800
+)
 
 type WeComConfig struct {
 	Enabled                bool   `mapstructure:"enabled"`
@@ -280,10 +286,10 @@ func Load(path string) (*Config, error) {
 	viper.SetDefault("email.use_ssl", false)
 	viper.SetDefault("pushplus.enabled", false)
 	viper.SetDefault("wecom.enabled", false)
-	viper.SetDefault("wecom.article_title", "VoHive 通知")
-	viper.SetDefault("wecom.article_description", "{{text}}")
-	viper.SetDefault("wecom.article_button_text", "查看详情")
-	viper.SetDefault("wecom.duplicate_check_interval", 1800)
+	viper.SetDefault("wecom.article_title", DefaultWeComArticleTitle)
+	viper.SetDefault("wecom.article_description", DefaultWeComArticleDescription)
+	viper.SetDefault("wecom.article_picurl", DefaultWeComArticlePicURL)
+	viper.SetDefault("wecom.duplicate_check_interval", DefaultWeComDuplicateCheckSeconds)
 	viper.SetDefault("wecom.api_base_url", DefaultWeComAPIBaseURL)
 	viper.SetDefault("web.username", "admin")
 	viper.SetDefault("web.password", "admin")
