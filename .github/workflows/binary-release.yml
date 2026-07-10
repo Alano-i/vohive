@@ -172,6 +172,7 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+      GH_PAT: ${{ secrets.GH_PAT }}
 
     steps:
       - name: Checkout
@@ -187,6 +188,10 @@ jobs:
             RELEASE_VERSION="${{ github.event.inputs.version || 'dev' }}"
           fi
           echo "release_version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Clean release asset directory before download
+        shell: bash
+        run: rm -rf dist
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -237,17 +242,14 @@ jobs:
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Validate token for cross-repo publish
+      - name: Skip cross-repo publish when token is missing
+        if: ${{ env.GH_PAT == '' }}
         shell: bash
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          if [[ -z "${GH_PAT}" ]]; then
-            echo "GH_PAT is required to publish assets to iniwex5/vohive-release"
-            exit 1
-          fi
+          echo "GH_PAT is not configured; skip publishing assets to iniwex5/vohive-release."
 
       - name: Publish to vohive-release repository
+        if: ${{ env.GH_PAT != '' }}
         uses: softprops/action-gh-release@v2
         with:
           repository: iniwex5/vohive-release
