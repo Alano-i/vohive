@@ -62,6 +62,59 @@ run_verify() {
 		-o /tmp/vohive-release-verify ./cmd/vohive
 }
 
+write_release_notes() {
+	version="$1"
+	out="$2"
+	prev_tag="$(latest_semver_tag)"
+	repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+	date_utc="$(date -u +'%Y-%m-%d %H:%M:%SZ')"
+
+	if [ -n "$prev_tag" ]; then
+		range="${prev_tag}..HEAD"
+		changes="$(git log "$range" --pretty=format:'- %s (%h)' --no-merges || true)"
+		compare_url="https://github.com/${repo}/compare/${prev_tag}...${version}"
+	else
+		changes="$(git log --max-count=20 --pretty=format:'- %s (%h)' --no-merges || true)"
+		compare_url=""
+	fi
+	if [ -z "$changes" ]; then
+		changes="- No code changes since ${prev_tag:-repository start}."
+	fi
+
+	{
+		echo "## VoHive ${version}"
+		echo
+		echo "Published at: ${date_utc}"
+		echo
+		echo "## Changes"
+		echo
+		printf '%s\n' "$changes"
+		echo
+		echo "## Install or upgrade"
+		echo
+		echo '```sh'
+		echo "curl -fsSL https://raw.githubusercontent.com/${repo}/main/scripts/install.sh | sudo sh -s -- --version ${version}"
+		echo '```'
+		echo
+		echo "The installer automatically selects the matching Linux package for amd64, arm64, or armv7."
+		echo
+		echo "## Release assets"
+		echo
+		echo "- vohive_${version}_linux_amd64"
+		echo "- vohive_${version}_linux_arm64"
+		echo "- vohive_${version}_linux_armv7"
+		echo "- install.sh"
+		echo "- install-local.sh"
+		echo "- uninstall.sh"
+		if [ -n "$compare_url" ]; then
+			echo
+			echo "## Full changelog"
+			echo
+			echo "$compare_url"
+		fi
+	} > "$out"
+}
+
 wait_for_binary_workflow() {
 	[ "$WAIT_RELEASE" = "1" ] || return 0
 	sha="$(git rev-parse HEAD)"
@@ -109,6 +162,9 @@ main() {
 	fi
 
 	run_verify
+	notes_file="$(mktemp)"
+	trap 'rm -f "$notes_file"' EXIT INT TERM
+	write_release_notes "$VERSION" "$notes_file"
 
 	branch="$(git branch --show-current)"
 	[ -n "$branch" ] || die "not on a branch"
@@ -117,7 +173,7 @@ main() {
 	git tag -a "$VERSION" -m "Release ${VERSION}"
 	git push origin "$VERSION"
 
-	gh release create "$VERSION" --title "VoHive ${VERSION}" --generate-notes --latest
+	gh release create "$VERSION" --title "VoHive ${VERSION}" --notes-file "$notes_file" --latest
 	wait_for_binary_workflow
 
 	echo "Release published: https://github.com/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/releases/tag/${VERSION}"
