@@ -25,7 +25,7 @@ ARMV7_OUT = $(DIST_DIR)/$(BINARY_NAME)_$(VERSION_TAG)_linux_armv7
 UPX ?= $(shell command -v upx || command -v upx-ucl)
 UPX_FLAGS ?= --best --lzma
 
-.PHONY: all build build-amd64 build-arm64 build-armv7 build-all check-local-modules frontend-dist clean
+.PHONY: all build build-amd64 build-arm64 build-armv7 build-all check-local-modules frontend-dist p release clean
 
 all: build-all
 
@@ -37,6 +37,9 @@ check-local-modules:
 	@for dir in $(LOCAL_MODULE_DIRS); do \
 		test -f "$$dir/go.mod" || { echo "错误: 缺少本地化模块 $$dir"; exit 1; }; \
 	done
+
+p release:
+	@./scripts/release.sh "$(PUBLISH_VERSION)"
 
 frontend-dist:
 	npm ci --prefix web
