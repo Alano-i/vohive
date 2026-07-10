@@ -824,7 +824,7 @@ onBeforeUnmount(() => {
                       :disabled="!wecomForm.enabled"
                       type="textarea"
                       :rows="2"
-                      :placeholder="'发自{{sms_sender}}\n{{timestamp}}'"
+                      :placeholder="'{{sms_text}}\n\n发自{{sms_sender}}\n{{timestamp}}'"
                     />
                   </div>
 

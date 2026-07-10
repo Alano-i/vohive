@@ -244,7 +244,7 @@ type PushplusConfig struct {
 const (
 	DefaultWeComAPIBaseURL            = "https://qyapi.weixin.qq.com"
 	DefaultWeComArticleTitle          = "{{sms_receiver}} 收到新短信"
-	DefaultWeComArticleDescription    = "发自{{sms_sender}}\n{{timestamp}}"
+	DefaultWeComArticleDescription    = "{{sms_text}}\n\n发自{{sms_sender}}\n{{timestamp}}"
 	DefaultWeComArticlePicURL         = "https://img.andp.cc/icons/upload/sms.png"
 	DefaultWeComDuplicateCheckSeconds = 1800
 )
