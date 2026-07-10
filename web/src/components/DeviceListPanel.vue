@@ -73,6 +73,13 @@ const secondaryStatus = (d: DeviceMgmtListItem) => {
   if (d?.vowifi_enabled) return 'WiFi-Calling'
   return [registrationText(d), dataNetworkText(d)].filter(Boolean).join(' · ')
 }
+
+const devicePathText = (d: DeviceMgmtListItem) => {
+  if (d?.interface) return d.interface
+  if (d?.at_port) return 'AT'
+  if (d?.control_device) return d.control_device
+  return '--'
+}
 </script>
 
 <template>
@@ -126,7 +133,7 @@ const secondaryStatus = (d: DeviceMgmtListItem) => {
               <div class="min-w-0">
                 <div class="font-bold text-gray-800 dark:text-gray-100 truncate">{{ d.name || d.id }}</div>
                 <div class="text-xs text-gray-500 mt-0.5 truncate">
-                  {{ d.id }} · {{ d?.interface || '--' }}
+                  {{ d.id }} · {{ devicePathText(d) }}
                 </div>
                 <div class="text-xs text-gray-400 mt-1 truncate">
                   {{ secondaryStatus(d) }}

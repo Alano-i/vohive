@@ -37,6 +37,21 @@ function isQmiDiscovery(d: DiscoveredDevice | null | undefined): boolean {
   return String(d.mode || '').toLowerCase() === 'qmi'
 }
 
+function isATOnlyDiscovery(d: DiscoveredDevice | null | undefined): boolean {
+  if (!d) return false
+  const mode = String(d.mode || '').toLowerCase()
+  return mode === 'unknown' && !!d.at_port && d.network_capable !== true
+}
+
+function discoveryDeviceTitle(d: DiscoveredDevice | null | undefined): string {
+  if (!d) return '--'
+  if (d.vendor_id === 0x2ca3 && d.product_id === 0x4006) return 'DJI Baiwang'
+  const iface = d.net_interface || ''
+  const driver = d.driver_name || ''
+  const title = [iface, driver].filter(Boolean).join(' · ')
+  return title || 'AT 串口设备'
+}
+
 function discoveryModeText(d: DiscoveredDevice | null | undefined): string {
   const mode = String(d?.mode || 'unknown').toLowerCase()
   if (mode === 'qmi') return 'QMI'
@@ -44,7 +59,24 @@ function discoveryModeText(d: DiscoveredDevice | null | undefined): string {
   if (mode === 'ecm') return 'ECM'
   if (mode === 'rndis') return 'RNDIS'
   if (mode === 'ncm') return 'NCM'
+  if (isATOnlyDiscovery(d)) return 'AT'
   return 'UNKNOWN'
+}
+
+function discoveryModeTagType(d: DiscoveredDevice | null | undefined): 'success' | 'warning' | 'info' {
+  if (isQmiDiscovery(d)) return 'success'
+  if (isATOnlyDiscovery(d)) return 'info'
+  return 'warning'
+}
+
+function discoveryMetaText(d: DiscoveredDevice): string {
+  const parts = [
+    isATOnlyDiscovery(d) ? 'AT-only 设备' : (d.control_path || ''),
+    d.at_port ? `AT: ${d.at_port}` : '',
+    d.imei ? `IMEI: ${d.imei}` : '',
+    d.usb_path ? `USB: ${d.usb_path}` : ''
+  ].filter(Boolean)
+  return parts.join(' · ')
 }
 
 const isQMIBackendOnly = computed(() => isWwanQmiControlPath(props.addSelected?.control_path || props.addConfig?.control_device))
@@ -102,11 +134,11 @@ watch(
           @click="emit('select-device', d)"
         >
           <div class="font-bold text-gray-800 flex items-center gap-2">
-            <span>{{ d.net_interface || '--' }} · {{ d.driver_name || '--' }}</span>
-            <el-tag size="small" :type="isQmiDiscovery(d) ? 'success' : 'warning'">{{ discoveryModeText(d) }}</el-tag>
+            <span>{{ discoveryDeviceTitle(d) }}</span>
+            <el-tag size="small" :type="discoveryModeTagType(d)">{{ discoveryModeText(d) }}</el-tag>
           </div>
           <div class="text-xs text-gray-500 mt-0.5 truncate">
-            {{ d.control_path }} · AT: {{ d.at_port || '--' }} · IMEI: {{ d.imei || '--' }} · USB: {{ d.usb_path || '--' }}
+            {{ discoveryMetaText(d) }}
           </div>
           <div v-if="d.degraded" class="text-xs text-amber-700 mt-1">
             无法读取 IMEI（控制口可能挂死），暂不可添加。
@@ -123,7 +155,7 @@ watch(
       <div class="flex items-center gap-4 text-sm">
         <div class="flex items-center gap-2">
           <span class="text-gray-600">模式:</span>
-          <el-tag size="small" :type="isQmiDiscovery(addSelected) ? 'success' : 'warning'">{{ discoveryModeText(addSelected) }}</el-tag>
+          <el-tag size="small" :type="discoveryModeTagType(addSelected)">{{ discoveryModeText(addSelected) }}</el-tag>
           <el-tag v-if="isQMIBackendOnly" size="small" type="success">仅 QMI 后端</el-tag>
           <el-tag v-if="isMBIMBackendOnly" size="small" type="success">仅 MBIM 后端</el-tag>
         </div>

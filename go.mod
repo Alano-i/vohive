@@ -8,7 +8,7 @@ replace (
 	github.com/iniwex5/netlink => github.com/Alano-i/vohive-collection/netlink v0.0.0-20260706153937-9d12189b3534
 	github.com/iniwex5/qqbot => github.com/Alano-i/vohive-collection/qqbot v0.0.0-20260706153937-9d12189b3534
 	github.com/iniwex5/quectel-qmi-go => github.com/Alano-i/vohive-collection/quectel-qmi-go v0.0.0-20260706153937-9d12189b3534
-	github.com/iniwex5/swu-go => github.com/Alano-i/vohive-collection/swu-go v0.0.0-20260706153937-9d12189b3534
+	github.com/iniwex5/swu-go => ./third_party/swu-go
 	github.com/iniwex5/vowifi-go => github.com/Alano-i/vohive-collection/vowifi-go v0.0.0-20260706153937-9d12189b3534
 )
 

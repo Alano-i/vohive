@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { DeviceOverviewItem } from '../types/api'
+import { computed } from 'vue'
 import { ArrowSync24Regular, Power24Regular, Mail24Regular } from '@vicons/fluent'
 
-defineProps<{
+const props = defineProps<{
   device: DeviceOverviewItem
   rotating: boolean
   rebooting: boolean
@@ -16,6 +17,13 @@ const emit = defineEmits<{
   'reconnect-vowifi': []
   'open-sms': []
 }>()
+
+const publicIPText = computed(() => {
+  const ip = String(props.device?.public_ip || '').trim()
+  if (ip) return ip
+  if (props.device?.network_connected === false) return '未联网'
+  return '---'
+})
 </script>
 
 <template>
@@ -29,7 +37,7 @@ const emit = defineEmits<{
             <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
               <span class="font-mono cursor-pointer hover:underline" @click="emit('copy-text', device.id)">{{ device.id }}</span>
               · 公网 IP:
-              <span class="font-mono cursor-pointer hover:underline" @click="emit('copy-text', device.public_ip || '')">{{ device.public_ip || '---' }}</span>
+              <span class="cursor-pointer hover:underline" :class="device.public_ip ? 'font-mono' : ''" @click="emit('copy-text', device.public_ip || '')">{{ publicIPText }}</span>
             </div>
           </div>
         </div>

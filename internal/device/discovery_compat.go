@@ -189,7 +189,7 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 		}, true
 	}
 
-	if vid != 0x2c7c && vid != 0x05c6 {
+	if !isATCompatibleUSBDevice(vid, pid) {
 		return CompatibleModem{}, false
 	}
 
@@ -218,6 +218,19 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 		TransportType:  mode,
 		NetworkCapable: mode == "qmi" || mode == "mbim",
 	}, true
+}
+
+func isATCompatibleUSBDevice(vid, pid uint16) bool {
+	switch vid {
+	case 0x2c7c: // Quectel
+		return true
+	case 0x05c6: // Qualcomm reference/vendor-specific devices
+		return true
+	case 0x2ca3: // DJI/Baiwang modules expose vendor-specific USB serial AT ports.
+		return pid == 0x4006
+	default:
+		return false
+	}
 }
 
 func classifyMode(controlPath, driver string) string {

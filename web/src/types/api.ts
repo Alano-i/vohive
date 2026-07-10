@@ -119,6 +119,9 @@ export type DeviceMgmtListItem = {
   public_ip: string
   public_ipv6?: string
   interface?: string
+  control_device?: string
+  at_port?: string
+  device_backend?: 'at' | 'qmi' | 'mbim'
   esim_transport?: string
   sms_enabled: boolean
   network_enabled: boolean
@@ -297,6 +300,7 @@ export type DashboardDevice = {
   signal_dbm: number
   public_ip?: string
   public_ipv6?: string
+  network_connected?: boolean
   vowifi_active?: boolean
   vowifi_runtime?: VoWiFiRuntimeState
 }

@@ -413,6 +413,9 @@ type deviceMgmtListItem struct {
 	PublicIP               string              `json:"public_ip"`
 	PublicIPv6             string              `json:"public_ipv6,omitempty"`
 	Interface              string              `json:"interface,omitempty"`
+	ControlDevice          string              `json:"control_device,omitempty"`
+	ATPort                 string              `json:"at_port,omitempty"`
+	DeviceBackend          string              `json:"device_backend,omitempty"`
 	ESIMTransport          string              `json:"esim_transport,omitempty"`
 	SMSEnabled             bool                `json:"sms_enabled"`
 	NetworkEnabled         bool                `json:"network_enabled"`
@@ -724,6 +727,9 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			PublicIP:               w.GetCachedIP(),
 			PublicIPv6:             w.GetCachedIPv6(),
 			Interface:              cfg.Interface,
+			ControlDevice:          cfg.ControlDevice,
+			ATPort:                 w.ResolvedATPort(),
+			DeviceBackend:          cfg.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
 			SMSEnabled:             cfg.SMSEnabled,
 			NetworkEnabled:         cfg.NetworkEnabled,
@@ -764,6 +770,9 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			ControlOnline:          false,
 			PublicIP:               "",
 			Interface:              dc.Interface,
+			ControlDevice:          dc.ControlDevice,
+			ATPort:                 dc.ATPort,
+			DeviceBackend:          dc.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(dc.ESIMTransport),
 			SMSEnabled:             true, // SMS 恒开（系统不变量）
 			NetworkEnabled:         dc.NetworkEnabled,

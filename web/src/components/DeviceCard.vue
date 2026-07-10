@@ -60,6 +60,13 @@ const hideNetworkModeOnNarrow = computed(() => {
   return networkModeText.value.toUpperCase() === 'LTE'
 })
 
+const publicIPText = computed(() => {
+  const ip = String(props.device?.public_ip || '').trim()
+  if (ip) return ip
+  if (props.device?.network_connected === false) return '未联网'
+  return '---'
+})
+
 function hasValidSignalDbm(dbm: number | null | undefined): dbm is number {
   return typeof dbm === 'number' && Number.isFinite(dbm) && dbm !== 0 && dbm !== -999
 }
@@ -142,7 +149,7 @@ function getSignalBars(dbm: number | null | undefined) {
         <div class="space-y-2">
           <div class="flex justify-between items-center text-sm">
             <span class="text-gray-400 flex items-center gap-1.5"><el-icon><Globe24Regular /></el-icon> 公网 IP</span>
-            <span class="font-mono font-bold text-indigo-600 dark:text-indigo-400">{{ device.public_ip || '---' }}</span>
+            <span class="font-bold text-indigo-600 dark:text-indigo-400" :class="device.public_ip ? 'font-mono' : ''">{{ publicIPText }}</span>
           </div>
         </div>
       </div>

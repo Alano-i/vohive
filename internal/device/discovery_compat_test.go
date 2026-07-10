@@ -252,6 +252,37 @@ func TestDiscoverFallbackOneRejectsUnknownVendorWithoutNetworkCapability(t *test
 	}
 }
 
+func TestDiscoverFallbackOneAcceptsDJIBaiwangATOnlyDevice(t *testing.T) {
+	root := t.TempDir()
+	usbPath := filepath.Join(root, "3-2")
+	if err := os.MkdirAll(filepath.Join(usbPath, "3-2:1.2", "tty", "ttyUSB2"), 0o755); err != nil {
+		t.Fatalf("mkdir tty tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(usbPath, "idVendor"), []byte("2ca3\n"), 0o644); err != nil {
+		t.Fatalf("write idVendor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(usbPath, "idProduct"), []byte("4006\n"), 0o644); err != nil {
+		t.Fatalf("write idProduct: %v", err)
+	}
+	if err := os.Symlink("/tmp/option", filepath.Join(usbPath, "3-2:1.2", "driver")); err != nil {
+		t.Fatalf("symlink driver: %v", err)
+	}
+
+	got, ok := discoverFallbackOne(usbPath)
+	if !ok {
+		t.Fatal("discoverFallbackOne() rejected DJI Baiwang AT-only device")
+	}
+	if got.VendorID != 0x2ca3 || got.ProductID != 0x4006 {
+		t.Fatalf("ids=%04x:%04x, want 2ca3:4006", got.VendorID, got.ProductID)
+	}
+	if got.ATPort != "/dev/ttyUSB2" {
+		t.Fatalf("ATPort=%q want /dev/ttyUSB2", got.ATPort)
+	}
+	if got.Mode != "unknown" || got.NetworkCapable {
+		t.Fatalf("mode=%q network=%v, want unknown/non-network", got.Mode, got.NetworkCapable)
+	}
+}
+
 func TestDiscoverFallbackOneRejectsQMIWithoutControlPath(t *testing.T) {
 	usbPath := t.TempDir()
 	usbName := filepath.Base(usbPath)
