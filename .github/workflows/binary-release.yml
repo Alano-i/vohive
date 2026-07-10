@@ -195,7 +195,8 @@ jobs:
         run: |
           cp scripts/install.sh dist/install.sh
           cp scripts/install-local.sh dist/install-local.sh
-          chmod 0755 dist/install.sh dist/install-local.sh
+          cp scripts/uninstall.sh dist/uninstall.sh
+          chmod 0755 dist/install.sh dist/install-local.sh dist/uninstall.sh
 
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
