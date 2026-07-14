@@ -9,6 +9,7 @@ import SwitchDark from '../components/SwitchDark.vue'
 import { debugCollector } from '../debug/collector'
 import {
   Mail24Regular,
+  Alert24Regular,
   Settings24Regular,
   SignOut24Regular,
   Board24Regular,
@@ -25,28 +26,30 @@ defineProps({
 })
 
 const emit = defineEmits(['toggle-theme'])
-
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const collapsed = ref(false)
 const isMobile = ref(false)
-const drawerOpen = ref(false)
 const debugOpen = ref(false)
 const DebugPanel = defineAsyncComponent(() => import('../components/DebugPanel.vue'))
 
 const menuItems = [
-  { index: '/', label: '仪表盘', icon: Board24Regular },
-  { index: '/devices', label: '设备管理', icon: Phone24Regular },
-  { index: '/proxy', label: '代理管理', icon: Globe24Regular },
-  { index: '/sms', label: '短信中心', icon: Mail24Regular },
-  { index: '/logs', label: '实时日志', icon: DocumentText24Regular },
-  { index: '/settings', label: '系统设置', icon: Settings24Regular }
+  { index: '/', label: '仪表盘', shortLabel: '仪表', caption: 'Overview', icon: Board24Regular },
+  { index: '/devices', label: '设备管理', shortLabel: '设备', caption: 'Devices', icon: Phone24Regular },
+  { index: '/proxy', label: '代理管理', shortLabel: '代理', caption: 'Network', icon: Globe24Regular },
+  { index: '/sms', label: '短信中心', shortLabel: '短信', caption: 'Messages', icon: Mail24Regular },
+  { index: '/notifications', label: '通知中心', shortLabel: '通知', caption: 'Notify', icon: Alert24Regular },
+  { index: '/logs', label: '实时日志', shortLabel: '日志', caption: 'Telemetry', icon: DocumentText24Regular },
+  { index: '/settings', label: '系统设置', shortLabel: '设置', caption: 'System', icon: Settings24Regular }
 ]
+
+const activePath = computed(() => route.path)
+const currentItem = computed(() => menuItems.find(item => item.index === activePath.value) || menuItems[0])
 
 async function handleLogout() {
   const { ElMessageBox } = await import('element-plus')
-  const confirmed = await ElMessageBox.confirm('确认退出登录？', '提示', {
+  const confirmed = await ElMessageBox.confirm('确认退出当前控制台？', '退出登录', {
     confirmButtonText: '退出',
     cancelButtonText: '取消',
     type: 'warning'
@@ -61,17 +64,6 @@ async function handleLogout() {
 function syncIsMobile() {
   if (typeof window === 'undefined') return
   isMobile.value = window.matchMedia('(max-width: 767px)').matches
-  if (!isMobile.value) {
-    drawerOpen.value = false
-  }
-}
-
-function handleNavToggle() {
-  if (isMobile.value) {
-    drawerOpen.value = true
-  } else {
-    collapsed.value = !collapsed.value
-  }
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -85,10 +77,7 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => {
   syncIsMobile()
   window.addEventListener('resize', syncIsMobile, { passive: true })
-
-  const saved = localStorage.getItem('debug_panel_open')
-  debugOpen.value = saved === '1'
-
+  debugOpen.value = localStorage.getItem('debug_panel_open') === '1'
   window.addEventListener('keydown', onKeydown)
 })
 
@@ -97,346 +86,646 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
 })
 
-watch(
-  () => route.fullPath,
-  () => {
-    drawerOpen.value = false
-  }
-)
-
-watch(
-  () => debugOpen.value,
-  (v) => {
-    localStorage.setItem('debug_panel_open', v ? '1' : '0')
-  }
-)
+watch(debugOpen, value => {
+  localStorage.setItem('debug_panel_open', value ? '1' : '0')
+})
 
 watch(
   () => debugCollector.openPanelRequestAt.value,
-  (ts) => {
-    if (!ts) return
-    debugOpen.value = true
+  ts => {
+    if (ts) debugOpen.value = true
   }
 )
-
-const activePath = computed(() => route.path)
 </script>
 
 <template>
-  <el-container v-if="auth.isAuthenticated && route.name !== 'Login'" class="h-full">
+  <el-container v-if="auth.isAuthenticated && route.name !== 'Login'" class="app-shell h-full">
     <el-aside
       v-if="!isMobile"
-      :width="collapsed ? '52px' : '232px'"
-      class="h-full ui-glass transition-[width] duration-200 relative sidebar-shell"
+      :width="collapsed ? '76px' : '252px'"
+      class="desktop-sidebar relative h-full transition-[width] duration-300"
     >
-      <div class="h-14 px-4 flex items-center" :class="collapsed ? 'justify-center px-0' : ''">
-        <div class="sidebar-brand-icon">V</div>
-        <div v-if="!collapsed" class="ml-3">
-          <div class="sidebar-brand-title">VoHive</div>
+      <div class="sidebar-ambient" />
+
+      <div class="sidebar-brand" :class="collapsed ? 'justify-center px-0' : ''">
+        <div class="brand-mark" aria-hidden="true">
+          <span class="brand-glyph">V</span>
+          <span class="brand-signal" />
+        </div>
+        <div v-if="!collapsed" class="min-w-0">
+          <div class="brand-name">VoHive</div>
+          <div class="brand-caption">CONTROL CENTER</div>
         </div>
       </div>
+
+      <div v-if="!collapsed" class="sidebar-section-label">Workspace</div>
 
       <el-menu
         :collapse="collapsed"
         :collapse-transition="false"
         :default-active="activePath"
-        class="sidebar-menu !border-0 !border-r-0 !bg-transparent mt-2"
+        class="sidebar-menu !border-0 !bg-transparent"
         router
       >
         <el-menu-item v-for="item in menuItems" :key="item.index" :index="item.index">
           <el-icon><component :is="item.icon" /></el-icon>
-          <template #title><span class="sidebar-menu-label">{{ item.label }}</span></template>
+          <template #title>
+            <span class="sidebar-menu-copy">
+              <span class="sidebar-menu-label">{{ item.label }}</span>
+              <span class="sidebar-menu-caption">{{ item.caption }}</span>
+            </span>
+          </template>
         </el-menu-item>
       </el-menu>
 
-      <div class="absolute bottom-4 w-full px-3" v-if="!collapsed">
-        <div class="ui-panel-muted p-3 flex items-center gap-3">
-          <div class="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-300">
-            <el-icon><Settings24Regular /></el-icon>
+      <div class="sidebar-footer" :class="collapsed ? 'px-3' : 'px-4'">
+        <div v-if="!collapsed" class="system-card">
+          <div class="system-card-topline">
+            <span class="system-live-dot"><i /></span>
+            <span>系统在线</span>
+            <span class="system-latency">LIVE</span>
           </div>
-          <div class="flex-1 min-w-0">
-            <div class="text-sm font-bold truncate">Admin</div>
-            <div class="text-xs text-gray-400 truncate">Administrator</div>
+          <div class="system-user-row">
+            <div class="user-avatar">A</div>
+            <div class="min-w-0 flex-1">
+              <div class="user-name">Administrator</div>
+              <div class="user-role">Local console</div>
+            </div>
+            <button type="button" class="logout-button" aria-label="退出登录" @click="handleLogout">
+              <SignOut24Regular />
+            </button>
           </div>
-          <el-button text type="danger" @click="handleLogout">
-            <el-icon><SignOut24Regular /></el-icon>
-          </el-button>
         </div>
+        <button v-else type="button" class="rail-logout" aria-label="退出登录" @click="handleLogout">
+          <SignOut24Regular />
+        </button>
       </div>
     </el-aside>
 
-    <el-drawer v-model="drawerOpen" direction="ltr" size="256px" :with-header="false" class="mobile-drawer">
-      <div class="h-full bg-white/95 dark:bg-[#141418]/95 backdrop-blur-md relative sidebar-shell">
-        <div class="h-16 px-4 flex items-center">
-          <div class="sidebar-brand-icon">V</div>
-          <div class="ml-3">
-            <div class="sidebar-brand-title">VoHive</div>
+    <el-container class="workspace-shell h-full min-w-0">
+      <el-header class="topbar">
+        <div class="topbar-left">
+          <button
+            v-if="!isMobile"
+            type="button"
+            class="collapse-button"
+            :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
+            @click="collapsed = !collapsed"
+          >
+            <el-icon><Expand v-if="collapsed" /><Fold v-else /></el-icon>
+          </button>
+
+          <div v-if="isMobile" class="mobile-brand-lockup">
+            <div class="brand-mark brand-mark-small" aria-hidden="true">
+              <span class="brand-glyph">V</span>
+              <span class="brand-signal" />
+            </div>
+            <div>
+              <div class="mobile-brand-name">VoHive</div>
+              <div class="mobile-route-name">{{ currentItem.label }}</div>
+            </div>
+          </div>
+
+          <div v-else class="route-context">
+            <span class="route-kicker">VOHIVE</span>
+            <span class="route-divider">/</span>
+            <span class="route-name">{{ currentItem.label }}</span>
           </div>
         </div>
 
-        <el-menu
-          :collapse="false"
-          :collapse-transition="false"
-          :default-active="activePath"
-          class="sidebar-menu !border-0 !border-r-0 !bg-transparent mt-2"
-          router
-        >
-          <el-menu-item v-for="item in menuItems" :key="item.index" :index="item.index">
-            <el-icon><component :is="item.icon" /></el-icon>
-            <template #title><span class="sidebar-menu-label">{{ item.label }}</span></template>
-          </el-menu-item>
-        </el-menu>
-
-        <div class="absolute bottom-4 w-full px-3">
-          <div class="ui-panel-muted p-3 flex items-center gap-3">
-            <div class="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-300">
-              <el-icon><Settings24Regular /></el-icon>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="text-sm font-bold truncate">Admin</div>
-              <div class="text-xs text-gray-400 truncate">Administrator</div>
-            </div>
-            <el-button text type="danger" @click="handleLogout">
-              <el-icon><SignOut24Regular /></el-icon>
-            </el-button>
-          </div>
-        </div>
-      </div>
-    </el-drawer>
-
-    <el-container class="h-full">
-      <el-header class="h-14 px-4 sm:px-5 flex items-center justify-between ui-glass border-b border-gray-100 dark:border-white/5 sticky top-0 z-10">
-        <div class="flex items-center gap-2">
-          <el-button text @click="handleNavToggle" class="!px-2">
-            <el-icon>
-              <Fold v-if="!isMobile && !collapsed" />
-              <Expand v-else />
-            </el-icon>
-          </el-button>
-        </div>
-
-        <div class="flex items-center gap-3">
+        <div class="topbar-actions">
           <SwitchDark :is-dark="isDark" @toggle="(e) => emit('toggle-theme', e)" />
-
-          <div class="hidden sm:flex items-center justify-center w-7 h-7 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 shadow-sm">
-            <span class="relative flex h-2 w-2">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-          </div>
         </div>
       </el-header>
 
-      <el-main class="p-4 sm:p-6 overflow-auto bg-gray-50/50 dark:bg-transparent">
-        <div class="main-inner mx-auto w-full">
-          <router-view v-slot="{ Component, route: r }">
+      <el-main class="app-main overflow-auto">
+        <div class="main-inner">
+          <router-view v-slot="{ Component, route: viewRoute }">
             <ErrorBoundary v-if="Component" title="页面渲染失败">
-              <component :is="Component" :key="r.fullPath" />
+              <component :is="Component" :key="String(viewRoute.name || viewRoute.path)" />
             </ErrorBoundary>
-            <LoadingScreen v-else title="正在加载页面…" subtitle="正在准备页面组件与资源" />
+            <LoadingScreen v-else title="正在加载页面…" subtitle="正在准备控制台资源" />
           </router-view>
         </div>
       </el-main>
     </el-container>
+
+    <nav v-if="isMobile" class="mobile-tabbar" aria-label="主导航">
+      <button
+        v-for="item in menuItems"
+        :key="item.index"
+        type="button"
+        class="mobile-tab"
+        :class="{ 'is-active': activePath === item.index }"
+        :aria-current="activePath === item.index ? 'page' : undefined"
+        @click="router.push(item.index)"
+      >
+        <span class="mobile-tab-icon"><component :is="item.icon" /></span>
+        <span class="mobile-tab-label">{{ item.shortLabel }}</span>
+      </button>
+    </nav>
 
     <DebugPanel v-model="debugOpen" />
   </el-container>
 </template>
 
 <style scoped>
-.sidebar-shell {
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-  --sidebar-menu-text: #475569;
-  --sidebar-menu-hover-bg: rgba(91, 91, 214, 0.08);
-  --sidebar-menu-active-bg: linear-gradient(135deg, rgba(91, 91, 214, 0.14), rgba(91, 91, 214, 0.1));
-  --sidebar-menu-active-color: #4a4ac2;
-  --sidebar-menu-active-ring: rgba(91, 91, 214, 0.16);
+.desktop-sidebar {
+  z-index: 20;
+  overflow: hidden;
+  border-right: 1px solid rgba(151, 181, 221, 0.1);
+  background:
+    linear-gradient(180deg, rgba(17, 26, 44, 0.98), rgba(8, 14, 26, 0.985)),
+    #0a1120;
+  color: #edf4ff;
+  box-shadow: 12px 0 40px rgba(13, 25, 45, 0.08);
 }
 
-.sidebar-brand-title {
-  font-family: "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 1.62rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1;
+.sidebar-ambient {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(37, 87, 202, 0.22), transparent 22rem),
+    linear-gradient(rgba(111, 150, 201, 0.038) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(111, 150, 201, 0.038) 1px, transparent 1px);
+  background-size: auto, 28px 28px, 28px 28px;
+  mask-image: linear-gradient(to bottom, #000, transparent 86%);
+}
+
+.sidebar-brand {
+  position: relative;
+  z-index: 1;
   display: flex;
+  height: 88px;
   align-items: center;
-  min-height: 1.75rem;
-  background: linear-gradient(135deg, #5b5bd6, #4a4ac2);
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 2px 8px rgba(91, 91, 214, 0.18));
-  white-space: nowrap;
-  padding-right: 4px;
+  gap: 12px;
+  padding: 0 21px;
 }
 
-.sidebar-brand-icon {
-  width: 1.62rem;
-  height: 1.62rem;
-  border-radius: 0.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  background: linear-gradient(135deg, #5b5bd6, #4a4ac2);
-  color: #fff;
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 0.84rem;
-  font-weight: 700;
-  box-shadow: 0 6px 14px rgba(91, 91, 214, 0.18);
+.brand-mark {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(111, 152, 245, 0.26);
+  border-radius: 13px;
+  background: linear-gradient(145deg, var(--vh-accent), var(--vh-accent-strong));
+  box-shadow: 0 10px 26px rgba(37, 87, 202, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
-.sidebar-menu-label {
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-weight: 500;
-  letter-spacing: -0.01em;
+.brand-mark::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(130deg, rgba(255, 255, 255, 0.18), transparent 48%);
 }
 
-:global(html.dark .sidebar-shell) {
-  --sidebar-menu-text: rgba(255, 255, 255, 0.84);
-  --sidebar-menu-hover-bg: rgba(91, 91, 214, 0.18);
-  --sidebar-menu-active-bg: linear-gradient(135deg, rgba(91, 91, 214, 0.24), rgba(91, 91, 214, 0.15));
-  --sidebar-menu-active-color: #a5a6f6;
-  --sidebar-menu-active-ring: rgba(91, 91, 214, 0.22);
+.brand-glyph {
+  position: relative;
+  font-size: 17px;
+  font-weight: 850;
+  letter-spacing: -0.08em;
+}
+
+.brand-signal {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #61e8ff;
+  box-shadow: 0 0 10px #61e8ff;
+}
+
+.brand-name {
+  color: #f4f7ff;
+  font-size: 20px;
+  font-weight: 760;
+  line-height: 1.05;
+  letter-spacing: -0.045em;
+}
+
+.brand-caption {
+  margin-top: 5px;
+  color: #7688a5;
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.22em;
+}
+
+.sidebar-section-label {
+  position: relative;
+  z-index: 1;
+  padding: 12px 22px 7px;
+  color: #667893;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
 :deep(.sidebar-menu) {
-  border-right: 0 !important;
-  --el-menu-hover-bg-color: var(--sidebar-menu-hover-bg);
-  --el-menu-active-color: var(--sidebar-menu-active-color);
-  --el-menu-text-color: var(--sidebar-menu-text);
+  position: relative;
+  z-index: 1;
+  --el-menu-text-color: #8999b1;
+  --el-menu-active-color: #f7f8ff;
+  --el-menu-hover-bg-color: rgba(37, 87, 202, 0.1);
 }
 
 :deep(.sidebar-menu .el-menu-item) {
-  height: 40px;
-  min-height: 40px;
-  line-height: 40px;
-  margin: 2px 8px;
-  border-radius: 10px;
-  padding-left: 13px !important;
-  padding-right: 13px !important;
-  font-size: 0.94rem;
-  font-weight: 400;
-  letter-spacing: 0;
-  color: var(--sidebar-menu-text);
-  transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  height: 52px;
+  margin: 4px 11px;
+  padding: 0 14px !important;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  color: #91a0b7;
+  line-height: 52px;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+:deep(.sidebar-menu .el-menu-item::before) {
+  position: absolute;
+  left: -1px;
+  width: 2px;
+  height: 20px;
+  border-radius: 99px;
+  content: "";
+  opacity: 0;
+  background: linear-gradient(var(--vh-accent), #4fe0ff);
+  box-shadow: 0 0 12px rgba(93, 216, 255, 0.72);
+  transition: opacity 180ms ease;
 }
 
 :deep(.sidebar-menu .el-menu-item .el-icon) {
-  margin-right: 8px !important;
-  font-size: 1.18rem;
-  color: inherit;
-}
-
-:deep(.sidebar-menu .el-menu-item .el-icon svg) {
-  width: 1.18rem;
-  height: 1.18rem;
+  width: 22px;
+  margin-right: 12px;
+  color: #8292aa;
+  font-size: 20px;
 }
 
 :deep(.sidebar-menu .el-menu-item:hover) {
-  background: var(--sidebar-menu-hover-bg);
-}
-
-:global(html.dark .sidebar-shell .sidebar-menu .el-menu-item:not(.is-active)) {
-  color: rgba(236, 241, 252, 0.9) !important;
-}
-
-:global(html.dark .sidebar-shell .sidebar-menu .el-menu-item:not(.is-active) .el-icon),
-:global(html.dark .sidebar-shell .sidebar-menu .el-menu-item:not(.is-active) .sidebar-menu-label) {
-  color: rgba(236, 241, 252, 0.9) !important;
+  color: #dbe5f5;
+  background: rgba(37, 87, 202, 0.1);
 }
 
 :deep(.sidebar-menu .el-menu-item.is-active) {
-  background: var(--sidebar-menu-active-bg);
-  color: var(--sidebar-menu-active-color);
-  box-shadow: inset 0 0 0 1px var(--sidebar-menu-active-ring);
+  border-color: rgba(71, 118, 223, 0.2);
+  color: #f6f7ff;
+  background: linear-gradient(100deg, rgba(37, 87, 202, 0.28), rgba(72, 196, 228, 0.055));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 9px 22px rgba(0, 0, 0, 0.12);
 }
 
-:deep(.sidebar-menu .el-menu-item.is-active .el-icon),
-:deep(.sidebar-menu .el-menu-item.is-active .sidebar-menu-label) {
-  color: inherit;
+:deep(.sidebar-menu .el-menu-item.is-active::before) {
+  opacity: 1;
 }
 
-:deep(.sidebar-menu .el-menu-item::after) {
-  display: none !important;
+:deep(.sidebar-menu .el-menu-item.is-active .el-icon) {
+  color: #6f98f5;
+  filter: drop-shadow(0 0 7px rgba(37, 87, 202, 0.48));
+}
+
+.sidebar-menu-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-menu-label {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.sidebar-menu-caption {
+  color: #52617a;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 :deep(.sidebar-menu.el-menu--collapse) {
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
 }
 
 :deep(.sidebar-menu.el-menu--collapse .el-menu-item) {
-  width: 36px;
-  height: 36px;
-  min-height: 36px;
-  line-height: 36px;
-  margin: 3px auto;
-  border-radius: 10px;
   display: grid;
-  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin: 5px auto;
   padding: 0 !important;
+  place-items: center;
 }
 
 :deep(.sidebar-menu.el-menu--collapse .el-menu-item .el-icon) {
-  width: 1.18rem;
-  height: 1.18rem;
-  margin: 0 !important;
-  font-size: 1.18rem;
-  line-height: 1;
+  margin: 0;
+}
+
+.sidebar-footer {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 18px;
+  left: 0;
+}
+
+.system-card {
+  padding: 13px;
+  border: 1px solid rgba(143, 166, 202, 0.11);
+  border-radius: 15px;
+  background: rgba(117, 139, 174, 0.055);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.system-card-topline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #8fa0b9;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.system-live-dot {
   display: grid;
+  width: 10px;
+  height: 10px;
   place-items: center;
+  border-radius: 50%;
+  background: rgba(63, 220, 166, 0.13);
 }
 
-:deep(.sidebar-menu.el-menu--collapse .el-menu-item .el-icon svg) {
-  width: 1.18rem;
-  height: 1.18rem;
-  display: block;
+.system-live-dot i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #43d5a3;
+  box-shadow: 0 0 7px #43d5a3;
 }
 
-:deep(.sidebar-menu.el-menu--collapse .el-menu-item .el-menu-tooltip__trigger) {
-  position: static;
-  inset: auto;
-  width: 100%;
-  height: 100%;
-  padding: 0 !important;
+.system-latency {
+  margin-left: auto;
+  color: #4fd9ac;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+}
+
+.system-user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid rgba(143, 166, 202, 0.09);
+}
+
+.user-avatar {
   display: grid;
+  width: 31px;
+  height: 31px;
   place-items: center;
+  border: 1px solid rgba(71, 118, 223, 0.24);
+  border-radius: 10px;
+  color: #d6e2ff;
+  background: rgba(37, 87, 202, 0.2);
+  font-size: 11px;
+  font-weight: 750;
 }
 
-:deep(.sidebar-menu.el-menu--collapse > .el-menu-item [class^=el-icon]) {
-  width: 1.18rem !important;
+.user-name {
+  overflow: hidden;
+  color: #dbe4f3;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-:deep(.sidebar-menu.el-menu--collapse .el-tooltip) {
-  width: 36px;
+.user-role {
+  margin-top: 2px;
+  color: #60718c;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+}
+
+.logout-button,
+.rail-logout,
+.collapse-button {
   display: grid;
+  border: 0;
   place-items: center;
+  cursor: pointer;
 }
 
-:deep(.sidebar-menu.el-menu--collapse .el-tooltip__trigger) {
+.logout-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  color: #71819a;
+  background: transparent;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.logout-button:hover {
+  color: #ff8796;
+  background: rgba(255, 103, 125, 0.1);
+}
+
+.logout-button svg,
+.rail-logout svg {
+  width: 17px;
+}
+
+.rail-logout {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  border: 1px solid rgba(143, 166, 202, 0.1);
+  border-radius: 13px;
+  color: #7e8da5;
+  background: rgba(117, 139, 174, 0.05);
+}
+
+.topbar {
+  display: flex;
+  height: 64px !important;
+  flex: 0 0 64px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--ui-border-muted);
+  background: color-mix(in srgb, var(--vh-page) 80%, transparent);
+  backdrop-filter: blur(24px) saturate(135%);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+}
+
+.topbar-left,
+.topbar-actions {
+  display: flex;
+  align-items: center;
+}
+
+.topbar-left {
+  gap: 15px;
+}
+
+.topbar-actions {
+  gap: 10px;
+}
+
+.collapse-button {
   width: 36px;
   height: 36px;
+  border: 1px solid var(--ui-border);
+  border-radius: 11px;
+  color: var(--vh-text-muted);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-sm);
+  transition: color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.collapse-button:hover {
+  border-color: rgba(37, 87, 202, 0.3);
+  color: var(--vh-accent);
+  transform: translateY(-1px);
+}
+
+.route-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.route-kicker {
+  color: var(--vh-text-soft);
+}
+
+.route-divider {
+  color: var(--ui-border);
+}
+
+.route-name {
+  color: var(--vh-text);
+}
+
+.mobile-tabbar {
+  position: fixed;
+  z-index: 100;
+  right: 10px;
+  bottom: max(9px, env(safe-area-inset-bottom));
+  left: 10px;
   display: grid;
-  place-items: center;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  min-height: 65px;
+  padding: 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: 21px;
+  background: color-mix(in srgb, var(--ui-surface-strong) 93%, transparent);
+  box-shadow: 0 18px 48px rgba(8, 17, 32, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
 }
 
-.main-inner {
+.mobile-tab {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 15px;
+  color: var(--vh-text-soft);
+  background: transparent;
+  cursor: pointer;
+}
+
+.mobile-tab::after {
+  position: absolute;
+  top: 4px;
+  width: 18px;
+  height: 2px;
+  border-radius: 99px;
+  content: "";
+  opacity: 0;
+  background: linear-gradient(90deg, var(--vh-accent), var(--vh-cyan));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--vh-accent) 55%, transparent);
+}
+
+.mobile-tab.is-active {
+  color: var(--vh-accent);
+  background: var(--vh-accent-soft);
+}
+
+.mobile-tab.is-active::after {
+  opacity: 1;
+}
+
+.mobile-tab-icon,
+.mobile-tab-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.mobile-tab-label {
+  overflow: hidden;
   max-width: 100%;
+  font-size: 9px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-@media (min-width: 768px) {
-  .main-inner {
-    max-width: clamp(0px, calc(100vw - 240px - 48px), 80rem);
+.mobile-brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark-small {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+}
+
+.brand-mark-small .brand-glyph {
+  font-size: 14px;
+}
+
+.mobile-brand-name {
+  color: var(--vh-text);
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.mobile-route-name {
+  margin-top: 3px;
+  color: var(--vh-text-soft);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 767px) {
+  .topbar {
+    height: calc(60px + env(safe-area-inset-top)) !important;
+    flex-basis: calc(60px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 14px 0;
   }
-}
-
-:deep(.mobile-drawer .el-drawer__body) {
-  padding: 0 !important;
 }
 </style>

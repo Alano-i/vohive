@@ -38,6 +38,7 @@ export type RealtimeTrafficSnapshot = {
 
 export type VoWiFiRuntimeState = {
   device_id?: string
+  phase?: string
   dataplane_mode?: string
   sim_ready?: boolean
   access_ready?: boolean
@@ -87,6 +88,8 @@ export type DeviceOverviewItem = {
   esim_transport?: string
   at_port?: string
   usb_path?: string
+  vendor_id?: number
+  product_id?: number
   local_phone?: string
   e911_setup_available?: boolean
   active_esim_profile_name?: string
@@ -127,7 +130,7 @@ export type DeviceMgmtListItem = {
   network_enabled: boolean
   vowifi_enabled?: boolean
   vowifi_runtime?: VoWiFiRuntimeState
-  modem?: Pick<ModemStatus, 'operator' | 'native_spn' | 'native_mcc' | 'native_mnc' | 'network_mode' | 'network_duplex' | 'radio_band' | 'radio_channel' | 'signal_dbm' | 'signal_sinr' | 'imei' | 'iccid' | 'reg_status'>
+  modem?: Pick<ModemStatus, 'operator' | 'native_spn' | 'native_mcc' | 'native_mnc' | 'network_mode' | 'network_duplex' | 'radio_band' | 'radio_channel' | 'signal_dbm' | 'signal_sinr' | 'imei' | 'iccid' | 'sim_inserted' | 'reg_status'>
 }
 
 export type DeviceConfigDTO = {
@@ -187,6 +190,7 @@ export type ModemStatus = {
   opl?: OPLRecord[]
   sim_service_table?: SIMServiceTable
   firmware?: string
+  sim_inserted?: boolean
   operator?: string
   network_mode?: string
   network_duplex?: string
@@ -297,6 +301,7 @@ export type DashboardDevice = {
   operator?: string
   network_mode?: string
   network_duplex?: string
+  sim_inserted?: boolean
   signal_dbm: number
   public_ip?: string
   public_ipv6?: string
@@ -331,6 +336,19 @@ export type SMSContact = {
   unread_count: number
   device_name?: string
   local_phone?: string  // 本机号码（收件人手机号）
+}
+
+export type SMSProfileDevice = {
+  device_id: string
+  device_name: string
+  iccid: string
+  imsi?: string
+  profile_name: string
+  service_provider_name?: string
+  phone_number?: string
+  active: boolean
+  running: boolean
+  healthy: boolean
 }
 
 export type CardPolicy = {

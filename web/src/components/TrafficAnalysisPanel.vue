@@ -259,7 +259,7 @@ const deviceSeriesName = computed(() => {
 
 const panelClass = computed(() => (
   props.mode === 'device'
-    ? 'ui-panel-muted p-6 overflow-hidden'
+    ? 'ui-panel-muted device-traffic-panel p-6 overflow-hidden'
     : 'ui-card p-6 overflow-hidden'
 ))
 
@@ -472,9 +472,9 @@ function handleRangeChange(value: string | number | boolean | undefined) {
       </div>
       <div class="flex items-center gap-2">
         <el-radio-group :model-value="range" :disabled="disabled" @change="handleRangeChange">
-          <el-radio-button label="day">日</el-radio-button>
-          <el-radio-button label="week">周</el-radio-button>
-          <el-radio-button label="month">月</el-radio-button>
+          <el-radio-button value="day">日</el-radio-button>
+          <el-radio-button value="week">周</el-radio-button>
+          <el-radio-button value="month">月</el-radio-button>
         </el-radio-group>
         <RefreshButton :loading="loading" :disabled="disabled" @click="emit('refresh')" />
       </div>
@@ -499,21 +499,25 @@ function handleRangeChange(value: string | number | boolean | undefined) {
       />
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-        <div class="ui-panel-muted p-3">
+        <div :class="{ 'traffic-analysis-surface': mode === 'global' }" class="ui-panel-muted p-3">
           <div class="text-xs text-gray-400">{{ rangeText }}下载</div>
           <div class="text-lg font-mono font-bold mt-1">{{ formatBytes(analysisTotal.rx) }}</div>
         </div>
-        <div class="ui-panel-muted p-3">
+        <div :class="{ 'traffic-analysis-surface': mode === 'global' }" class="ui-panel-muted p-3">
           <div class="text-xs text-gray-400">{{ rangeText }}上传</div>
           <div class="text-lg font-mono font-bold mt-1">{{ formatBytes(analysisTotal.tx) }}</div>
         </div>
-        <div class="ui-panel-muted p-3">
+        <div :class="{ 'traffic-analysis-surface': mode === 'global' }" class="ui-panel-muted p-3">
           <div class="text-xs text-gray-400">{{ rangeText }}合计</div>
           <div class="text-lg font-mono font-bold mt-1">{{ formatBytes(analysisTotal.total) }}</div>
         </div>
       </div>
 
-      <div v-if="chartOption && VChartComp" class="mb-6 h-[300px] w-full">
+      <div
+        v-if="chartOption && VChartComp"
+        :class="{ 'traffic-analysis-surface traffic-analysis-chart-surface': mode === 'global' }"
+        class="mb-6 h-[300px] w-full"
+      >
         <component :is="VChartComp" class="chart" :option="chartOption" autoresize />
       </div>
       <ErrorState
@@ -526,18 +530,20 @@ function handleRangeChange(value: string | number | boolean | undefined) {
       />
       <div
         v-else-if="chartOption && chartLoading"
+        :class="{ 'traffic-analysis-surface': mode === 'global' }"
         class="mb-6 h-[180px] ui-panel-muted rounded-xl border border-dashed border-gray-200 dark:border-white/10 flex items-center justify-center text-sm text-gray-400 dark:text-gray-500"
       >
         流量图表加载中...
       </div>
       <div
         v-else
+        :class="{ 'traffic-analysis-surface': mode === 'global' }"
         class="mb-6 h-[180px] ui-panel-muted rounded-xl border border-dashed border-gray-200 dark:border-white/10 flex items-center justify-center text-sm text-gray-400 dark:text-gray-500"
       >
         暂无流量图表数据
       </div>
 
-      <el-table :data="analysisBuckets" size="small" stripe v-loading="!!loading" class="w-full">
+      <el-table :data="analysisBuckets" size="small" stripe class="w-full">
         <el-table-column label="时间" min-width="140">
           <template #default="scope">{{ formatTrafficBucketTime(scope?.row || {}) }}</template>
         </el-table-column>
@@ -554,3 +560,26 @@ function handleRangeChange(value: string | number | boolean | undefined) {
     </template>
   </div>
 </template>
+
+<style scoped>
+.device-traffic-panel {
+  border: 0 !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:global(html.dark .traffic-analysis-surface) {
+  border: 0 !important;
+  border-radius: var(--ui-radius-lg);
+  background: rgba(0, 0, 0, 0.2) !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:global(html.dark .traffic-analysis-chart-surface) {
+  padding: 0.75rem;
+}
+</style>

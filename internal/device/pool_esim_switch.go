@@ -1096,10 +1096,10 @@ func (p *Pool) handleESIMSwitchAfter(deviceID string, token uint64) {
 	}
 	p.restorePostSwitchConnectivity(deviceID, worker, snapshot, restoreGateErr, true)
 
-	// 切卡过程中 SIM power cycle 会导致 overview 缓存被清空且重载失败（模组正在重置），
-	// 此处模组已恢复，触发一次 overview 重新加载以恢复 profile 列表。
+	// 切卡过程中 SIM power cycle 可能留下仅含 profiles、ChipInfo 为空的临时缓存。
+	// 此处模组已恢复，强制重建完整总览，恢复固件信息与下载入口。
 	if worker.EsimMgr != nil {
-		worker.EsimMgr.WarmOverviewAsync("post_switch_finalize")
+		worker.EsimMgr.RefreshOverviewAsync("post_switch_finalize")
 	}
 	finalizeOK = true
 }

@@ -1501,6 +1501,40 @@ func TestWarmOverviewAsyncWaitsForReloadSuppressionWindow(t *testing.T) {
 	}
 }
 
+func TestRefreshOverviewAsyncReplacesProfilesOnlyCache(t *testing.T) {
+	loaded := make(chan struct{}, 1)
+	mgr := newTestManagerWithOverviewLoader(func() (*EsimOverview, error) {
+		loaded <- struct{}{}
+		return &EsimOverview{
+			ChipInfo: &EUICCChipInfo{SkuName: "eSTK.me", Firmware: "32.33.0"},
+			Profiles: []EUICCProfiles{{EID: "eid-fresh", Profiles: []ProfileItem{}}},
+		}, nil
+	})
+	mgr.overviewCache = &EsimOverview{
+		ChipInfo: nil,
+		Profiles: []EUICCProfiles{{EID: "eid-stale", Profiles: []ProfileItem{}}},
+	}
+
+	mgr.RefreshOverviewAsync("post_switch_finalize")
+
+	select {
+	case <-loaded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RefreshOverviewAsync() did not rebuild profiles-only cache")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got := mgr.cachedOverview()
+		if got != nil && got.ChipInfo != nil && got.ChipInfo.Firmware == "32.33.0" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cached overview was not replaced: %#v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRefreshOverviewDuringDelayedBackgroundReloadUsesSingleLoad(t *testing.T) {
 	var calls atomic.Int32
 	mgr := newTestManagerWithOverviewLoader(func() (*EsimOverview, error) {
@@ -3142,5 +3176,22 @@ func TestHasReusableChipProductInfoIgnoresFallbackFirmware(t *testing.T) {
 	}
 	if !hasReusableChipProductInfo(&EUICCChipInfo{SerialNumber: "T3VAMD0"}) {
 		t.Fatal("hasReusableChipProductInfo(serial set)=false, want true")
+	}
+}
+
+func TestCloneProfilesPreservesEmptyArrays(t *testing.T) {
+	groups := cloneProfiles([]EUICCProfiles{{
+		EID:      "eid-empty",
+		AIDHex:   "A000",
+		Profiles: nil,
+	}})
+	if len(groups) != 1 {
+		t.Fatalf("len(groups)=%d, want 1", len(groups))
+	}
+	if groups[0].Profiles == nil {
+		t.Fatal("empty profile list must be encoded as [] rather than null")
+	}
+	if empty := cloneProfiles(nil); empty == nil {
+		t.Fatal("empty group list must be encoded as [] rather than null")
 	}
 }

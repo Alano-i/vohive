@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EsimChipInfo, EsimEUICCProfiles, EsimNotificationItem, EsimSpaceDelta } from '../types/api'
 import { devicesService } from '../services/devices'
 import { errorMessage } from '../services/http'
 import { api } from '../stores/auth'
-import { useSensitiveVisibility } from '../composables/useSensitiveVisibility'
+import { SENSITIVE_VALUE_PLACEHOLDER, useSensitiveVisibility } from '../composables/useSensitiveVisibility'
 import EsimCardPolicyInline from './EsimCardPolicyInline.vue'
 import { applyOptimisticActiveState } from './deviceEsimOptimistic'
 import { pickNextDownloadAid } from './deviceEsimOverviewRefresh'
@@ -17,8 +17,7 @@ import {
   notificationMetaContainerClass,
   notificationMetaItemClass,
   reconcileEsimNotificationDialogState,
-  shouldShowEsimNotificationIcon,
-  shouldShowEsimRefreshIcon
+  shouldShowEsimNotificationIcon
 } from './deviceEsimNotifications'
 import {
   Add24Regular,
@@ -46,6 +45,8 @@ const profiles = ref<EsimEUICCProfiles[]>([])
 const switching = ref<string | null>(null)
 const deleting = ref<string | null>(null)
 const renaming = ref<string | null>(null)
+const editingPhone = ref<string | null>(null)
+const profilePhones = ref<Record<string, string>>({})
 const showSensitive = useSensitiveVisibility()
 const renameValue = ref('')
 // 行内卡策略展开态（手风琴，一次只展开一行，按 iccid 记）
@@ -74,6 +75,25 @@ const downloadSessionId = ref(0)
 const recentSpaceDelta = ref<{ aidHex: string; message: string } | null>(null)
 let recentSpaceDeltaTimer: number | null = null
 let lastDeviceImeiDefault = ''
+
+const downloadTargets = computed(() => {
+  const detailed = chipInfo.value?.eids || []
+  if (detailed.length > 0) return detailed
+  return profiles.value.map(group => ({
+    aid: group.aid_hex,
+    eid: group.eid,
+    free_nvram: ''
+  }))
+})
+
+function pickAvailableDownloadAid(currentAidHex: string): string {
+  const detailed = pickNextDownloadAid(chipInfo.value, currentAidHex)
+  if (detailed) return detailed
+  if (currentAidHex && downloadTargets.value.some(item => item.aid === currentAidHex)) {
+    return currentAidHex
+  }
+  return downloadTargets.value[0]?.aid || ''
+}
 
 function defaultDeviceImei() {
   return (props.deviceImei || '').trim()
@@ -143,6 +163,18 @@ async function fetchNotifications() {
   }
 }
 
+async function fetchProfilePhones() {
+  const result = await devicesService.getSMSProfiles()
+  if (!result.ok) return
+  const next: Record<string, string> = {}
+  for (const profile of result.data.profiles) {
+    if (profile.device_id === props.deviceId && profile.iccid) {
+      next[profile.iccid] = String(profile.phone_number || '')
+    }
+  }
+  profilePhones.value = next
+}
+
 async function openNotificationsDialog() {
   notificationsDialogOpen.value = true
   await fetchNotifications()
@@ -186,6 +218,7 @@ async function retryNotification(item: EsimNotificationItem) {
 
 // 获取 eSIM 总览数据
 async function fetchOverview(refresh = false) {
+  if (refresh && profilesRefreshing.value) return
   fetchOverviewRequestId += 1
   const requestId = fetchOverviewRequestId
 
@@ -215,7 +248,8 @@ async function fetchOverview(refresh = false) {
     if (!result.ok) throw result.error
     chipInfo.value = result.data.chipInfo
     profiles.value = result.data.profiles
-    downloadForm.value.aidHex = pickNextDownloadAid(chipInfo.value, currentAidHex)
+    void fetchProfilePhones()
+    downloadForm.value.aidHex = pickAvailableDownloadAid(currentAidHex)
   } catch (e: unknown) {
     if (result.ok === false && result.error.code === 'ERR_CANCELED') {
       return
@@ -238,6 +272,7 @@ async function fetchProfiles(refresh = false) {
   try {
     if (!result.ok) throw result.error
     profiles.value = result.data
+    void fetchProfilePhones()
   } catch (e: unknown) {
     ElMessage.error(errorMessage(e, '获取 eSIM Profiles 失败'))
   } finally {
@@ -305,6 +340,41 @@ function cancelRename() {
   renameValue.value = ''
 }
 
+async function editProfilePhone(iccid: string, profileName: string) {
+  if (editingPhone.value) return
+  editingPhone.value = iccid
+  try {
+    const currentResult = await devicesService.getEsimProfilePhone(iccid)
+    if (!currentResult.ok) throw currentResult.error
+    const { value } = await ElMessageBox.prompt(
+      '请输入包含国家或地区代码的完整号码；留空并保存可清除人工号码。',
+      `设置本机号码 · ${profileName || iccid}`,
+      {
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValue: currentResult.data,
+        inputPlaceholder: '例如 +85212345678',
+        inputValidator: input => {
+          const phone = String(input || '').trim()
+          if (!phone) return true
+          return /^\+?[0-9]{5,20}$/.test(phone) || '请输入 5-20 位数字，可使用 + 开头'
+        }
+      }
+    )
+    const saveResult = await devicesService.setEsimProfilePhone(iccid, String(value || '').trim())
+    if (!saveResult.ok) throw saveResult.error
+    profilePhones.value = { ...profilePhones.value, [iccid]: saveResult.data }
+    ElMessage.success(saveResult.data ? '本机号码已保存' : '人工本机号码已清除')
+  } catch (e: unknown) {
+    const message = errorMessage(e, '')
+    if (message && !message.toLowerCase().includes('cancel')) {
+      ElMessage.error(errorMessage(e, '设置本机号码失败'))
+    }
+  } finally {
+    editingPhone.value = null
+  }
+}
+
 // 删除 profile（需要输入 ICCID 后 4 位确认）
 async function deleteProfile(iccid: string, name: string, aidHex: string) {
   const last4 = iccid.slice(-4)
@@ -345,7 +415,7 @@ async function deleteProfile(iccid: string, name: string, aidHex: string) {
 // 下载新 profile（SSE 流式进度）
 async function downloadProfile() {
   const { smdp, matchingId, confirmationCode, aidHex, imei } = downloadForm.value
-  const targetAidHex = aidHex || pickNextDownloadAid(chipInfo.value, '')
+  const targetAidHex = aidHex || pickAvailableDownloadAid('')
   if (!smdp) {
     ElMessage.warning('请输入 SM-DP+ 地址')
     return
@@ -466,59 +536,29 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="space-y-5">
-    <div v-if="loading" class="space-y-4">
-      <div class="ui-panel-muted p-4 relative overflow-hidden esim-loading-hero">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-xl esim-orbit flex items-center justify-center text-white text-xs font-bold">
-            ESIM
-          </div>
-          <div class="space-y-2 flex-1">
-            <div class="h-4 w-44 rounded-md esim-skeleton-line" />
-            <div class="h-3 w-64 rounded-md esim-skeleton-line esim-skeleton-line-soft" />
-          </div>
-          <div class="flex items-center gap-1.5">
-            <span class="esim-dot" />
-            <span class="esim-dot" />
-            <span class="esim-dot" />
-          </div>
-        </div>
-        <div class="esim-skeleton-shimmer" />
-      </div>
-
-      <div class="ui-panel-muted p-4 space-y-3">
-        <div class="h-3 w-28 rounded-md esim-skeleton-line" />
-        <div class="space-y-2">
-          <div class="h-10 rounded-xl esim-skeleton-line" />
-          <div class="h-10 rounded-xl esim-skeleton-line esim-skeleton-line-soft" />
-          <div class="h-10 rounded-xl esim-skeleton-line" />
-        </div>
-      </div>
-    </div>
-
-    <template v-else>
       <!-- 芯片信息 -->
-      <div v-if="chipInfo" class="ui-panel-muted p-4 relative">
+      <div v-if="chipInfo || profiles.length > 0" class="ui-panel-muted p-4 relative">
       <div class="flex items-center justify-between gap-3 mb-3">
         <div class="flex items-center gap-3 min-w-0">
-          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-[#5b5bd6] to-[#4a4ac2] text-white text-xs font-bold flex items-center justify-center shadow-lg shadow-indigo-500/25">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-[#2557ca] to-[#1947ad] text-white text-xs font-bold flex items-center justify-center shadow-lg shadow-blue-700/25">
             ESIM
           </div>
           <div>
             <div class="text-base font-bold text-gray-900 dark:text-white">
-              {{ chipInfo.sku_name || 'eUICC' }}
+              {{ chipInfo?.sku_name || 'eUICC' }}
             </div>
             <div class="text-xs text-gray-500 dark:text-gray-400 font-mono">
-              <template v-if="chipInfo.firmware">固件 {{ chipInfo.firmware }}</template>
-              <template v-if="chipInfo.serial_number">
-                · SN: <span class="transition-all" :class="{ 'blur-sm select-none': !showSensitive }">{{ chipInfo.serial_number }}</span>
+              <span>固件 {{ chipInfo?.firmware || '--' }}</span>
+              <template v-if="chipInfo?.serial_number">
+                · SN: <span :class="{ 'select-none': !showSensitive }">{{ showSensitive ? chipInfo.serial_number : SENSITIVE_VALUE_PLACEHOLDER }}</span>
               </template>
             </div>
           </div>
         </div>
         <div class="flex items-center gap-2">
           <el-tooltip content="手动刷新" placement="top">
-            <el-button circle text :loading="profilesRefreshing" @click="fetchOverview(true)">
-              <el-icon v-if="shouldShowEsimRefreshIcon(profilesRefreshing)" size="18"><ArrowSync24Regular /></el-icon>
+            <el-button circle text :aria-busy="profilesRefreshing ? 'true' : 'false'" @click="fetchOverview(true)">
+              <el-icon size="18" :class="{ 'refresh-icon-spinning': profilesRefreshing }"><ArrowSync24Regular /></el-icon>
             </el-button>
           </el-tooltip>
           <el-tooltip content="当前通知" placement="top">
@@ -545,8 +585,8 @@ onBeforeUnmount(() => {
         <div class="flex items-center justify-between">
           <div>
             <span class="text-sm font-bold text-gray-900 dark:text-white">eUICC #{{ gi + 1 }}</span>
-            <span class="text-xs text-gray-400 font-mono ml-2 transition-all" :class="{ 'blur-sm select-none': !showSensitive }">
-              {{ group.eid }}
+            <span class="text-xs text-gray-400 font-mono ml-2" :class="{ 'select-none': !showSensitive }">
+              {{ showSensitive ? group.eid : SENSITIVE_VALUE_PLACEHOLDER }}
             </span>
           </div>
           <div v-if="chipInfo?.eids" class="text-xs text-gray-500">
@@ -604,14 +644,19 @@ onBeforeUnmount(() => {
             <template v-if="renaming !== p.iccid">
               <div class="flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full flex-shrink-0" :class="p.state === 1 ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'" />
-                <span class="font-medium text-sm text-gray-900 dark:text-white truncate">{{ p.name || p.iccid }}</span>
+                <span class="font-medium text-sm text-gray-900 dark:text-white truncate">
+                  {{ p.name || (showSensitive ? p.iccid : SENSITIVE_VALUE_PLACEHOLDER) }}
+                </span>
                 <el-tag size="small" :type="p.state === 1 ? 'success' : 'info'" class="flex-shrink-0">
                   {{ p.state_text }}
                 </el-tag>
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 ml-4 flex flex-wrap items-center gap-x-2 gap-y-1 transition-all">
                 <span>{{ p.service_provider_name }}</span>
-                <span :class="{ 'blur-sm select-none': !showSensitive }">{{ p.iccid }}</span>
+                <span :class="{ 'select-none': !showSensitive }">{{ showSensitive ? p.iccid : SENSITIVE_VALUE_PLACEHOLDER }}</span>
+                <span v-if="profilePhones[p.iccid]" :class="{ 'select-none': !showSensitive }">
+                  本机号 {{ showSensitive ? profilePhones[p.iccid] : SENSITIVE_VALUE_PLACEHOLDER }}
+                </span>
               </div>
             </template>
             <!-- 编辑名称模式 -->
@@ -651,6 +696,14 @@ onBeforeUnmount(() => {
               plain
             >
               改名
+            </el-button>
+            <el-button
+              size="small"
+              :loading="editingPhone === p.iccid"
+              @click="editProfilePhone(p.iccid, p.name)"
+              plain
+            >
+              号码
             </el-button>
             <el-button
               size="small"
@@ -720,7 +773,8 @@ onBeforeUnmount(() => {
             </div>
             <el-button
               size="small"
-              type="primary"
+              type="danger"
+              plain
               class="self-start sm:self-auto"
               :disabled="!item.can_retry"
               :loading="retryingNotificationSequence === item.sequence_number"
@@ -733,9 +787,9 @@ onBeforeUnmount(() => {
       </el-dialog>
 
       <!-- 下载新 Profile -->
-      <div v-if="chipInfo" class="ui-panel-muted p-4">
+      <div v-if="chipInfo || profiles.length > 0" class="ui-panel-muted p-4">
       <div class="flex items-center gap-2 mb-3">
-        <div class="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+        <div class="w-7 h-7 rounded-lg bg-primary-50 dark:bg-primary-500/10 flex items-center justify-center text-primary-600 dark:text-primary-400">
           <el-icon size="16"><Add24Regular /></el-icon>
         </div>
         <div class="text-sm font-bold text-gray-900 dark:text-white">下载新 Profile</div>
@@ -761,9 +815,9 @@ onBeforeUnmount(() => {
           <div class="text-[11px] font-bold text-gray-500 uppercase tracking-wider">目标 eUICC</div>
           <el-select v-model="downloadForm.aidHex" placeholder="选择目标 eUICC">
             <el-option
-              v-for="(eid, ei) in (chipInfo?.eids || [])"
+              v-for="(eid, ei) in downloadTargets"
               :key="eid.aid"
-              :label="`eUICC #${Number(ei) + 1} (...${eid.eid.slice(-4)}) — ${eid.free_nvram} 可用`"
+              :label="eid.free_nvram ? `eUICC #${Number(ei) + 1} (...${eid.eid.slice(-4)}) — ${eid.free_nvram} 可用` : `eUICC #${Number(ei) + 1} (...${eid.eid.slice(-4)})`"
               :value="eid.aid"
             />
           </el-select>
@@ -794,75 +848,6 @@ onBeforeUnmount(() => {
     </div>
 
       <!-- 空状态 -->
-      <EmptyState v-if="profiles.length === 0 && !chipInfo" title="未检测到 eUICC" subtitle="此SIM卡可能不支持 eUICC 功能" />
-    </template>
+      <EmptyState v-if="profiles.length === 0 && !chipInfo && !loading" bare title="未检测到 eUICC" subtitle="此SIM卡可能不支持 eUICC 功能" />
   </div>
 </template>
-
-<style scoped>
-.esim-loading-hero {
-  min-height: 88px;
-}
-
-.esim-orbit {
-  background: linear-gradient(135deg, #5b5bd6, #4a4ac2);
-  animation: esim-orbit 2.2s ease-in-out infinite;
-}
-
-.esim-skeleton-line {
-  background: linear-gradient(90deg, rgba(148, 163, 184, 0.18), rgba(148, 163, 184, 0.34), rgba(148, 163, 184, 0.18));
-  background-size: 200% 100%;
-  animation: esim-shimmer 1.4s linear infinite;
-}
-
-.esim-skeleton-line-soft {
-  opacity: 0.8;
-  animation-duration: 1.9s;
-}
-
-.esim-skeleton-shimmer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.24) 45%, transparent 75%);
-  transform: translateX(-130%);
-  animation: esim-sweep 2.1s ease-in-out infinite;
-}
-
-.esim-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 9999px;
-  background: #5b5bd6;
-  opacity: 0.3;
-  animation: esim-dot-bounce 1.1s ease-in-out infinite;
-}
-
-.esim-dot:nth-child(2) {
-  animation-delay: 0.16s;
-}
-
-.esim-dot:nth-child(3) {
-  animation-delay: 0.32s;
-}
-
-@keyframes esim-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-@keyframes esim-sweep {
-  0% { transform: translateX(-130%); }
-  100% { transform: translateX(130%); }
-}
-
-@keyframes esim-dot-bounce {
-  0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
-}
-
-@keyframes esim-orbit {
-  0%, 100% { transform: scale(1); box-shadow: 0 8px 18px rgba(16, 185, 129, 0.25); }
-  50% { transform: scale(1.04); box-shadow: 0 10px 22px rgba(20, 184, 166, 0.35); }
-}
-</style>

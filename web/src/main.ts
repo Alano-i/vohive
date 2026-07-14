@@ -140,6 +140,14 @@ router.onError((err) => {
 app.mount('#app')
 bootFinished = true
 
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(err => {
+      debugCollector.recordJsError(err, 'service-worker')
+    })
+  })
+}
+
 if ('requestIdleCallback' in window) {
   const win = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number }
   win.requestIdleCallback?.(loadFonts, { timeout: 2000 })

@@ -1,21 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import EmptyState from './EmptyState.vue'
-import ListSkeleton from './ListSkeleton.vue'
-import StatusLight from './StatusLight.vue'
 import type { DeviceMgmtListItem } from '../types/api'
-import { isControlOnline, isRadioRegistered, lifecycleStatusLabel, primaryLifecycleStatus } from '../utils/deviceLifecycle'
+import { isControlOnline, isRadioRegistered, isSIMMissing, lifecycleStatusLabel, primaryLifecycleStatus } from '../utils/deviceLifecycle'
 
 const props = defineProps<{
-  loading: boolean
   query: string
   statusFilter: 'all' | 'online' | 'offline'
   sortKey: 'name' | 'signal'
   sortDir: 'asc' | 'desc'
   selectedId: string
   filteredDevices: DeviceMgmtListItem[]
-  deviceCount: number
-  deviceLimit: number
 }>()
 
 const emit = defineEmits<{
@@ -50,12 +45,26 @@ const modelSortDir = computed({
 
 const primaryStatus = primaryLifecycleStatus
 
-const registrationText = (d: DeviceMgmtListItem) => {
-  const phaseText = lifecycleStatusLabel(d.lifecycle_phase)
-  if (phaseText && d.lifecycle_phase !== 'online' && d.lifecycle_phase !== 'offline') return phaseText
-  if (isRadioRegistered(d)) {
-    return `${d?.modem?.operator || '--'} · ${[d?.modem?.network_duplex, d?.modem?.network_mode].filter(Boolean).join(' ') || '--'}`
+const statusTagClass = (tone: ReturnType<typeof primaryLifecycleStatus>['tone']) => {
+  switch (tone) {
+    case 'success':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300'
+    case 'warning':
+      return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300'
+    case 'danger':
+      return 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300'
   }
+}
+
+const registrationText = (d: DeviceMgmtListItem) => {
+	if (isSIMMissing(d)) return '未插卡'
+	if (isRadioRegistered(d)) {
+		const network = [d?.modem?.network_duplex, d?.modem?.network_mode].filter(Boolean).join(' ') || '--'
+		const publicIP = String(d?.public_ip || '').trim()
+		return [d?.modem?.operator || '--', network, publicIP].filter(Boolean).join(' · ')
+	}
+	const phaseText = lifecycleStatusLabel(d.lifecycle_phase)
+	if (phaseText && d.lifecycle_phase !== 'online' && d.lifecycle_phase !== 'offline') return phaseText
   if (!isControlOnline(d)) return '控制面恢复中'
   if (d.registration_state_label === 'searching') return '搜索网络中'
   if (d.registration_state_label === 'denied') return '驻网被拒'
@@ -70,15 +79,34 @@ const dataNetworkText = (d: DeviceMgmtListItem) => {
 }
 
 const secondaryStatus = (d: DeviceMgmtListItem) => {
-  if (d?.vowifi_enabled) return 'WiFi-Calling'
+  if (isSIMMissing(d)) return '未插卡'
+  if (d?.vowifi_enabled) return vowifiStatusText(d)
   return [registrationText(d), dataNetworkText(d)].filter(Boolean).join(' · ')
+}
+
+const vowifiStatusText = (d: DeviceMgmtListItem) => {
+  const rt = d?.vowifi_runtime
+  if (!rt) return 'VoWiFi 启动中'
+  if (rt.phase === 'failed') return `VoWiFi 失败${vowifiErrorText(rt.last_error)}`
+  if (rt.sms_ready) return 'WiFi-Calling'
+  if (rt.ims_ready) return 'IMS 已就绪 · SMS 未就绪'
+  if (rt.tunnel_ready) return 'Tunnel 已就绪 · IMS 未就绪'
+  if (rt.access_ready || rt.sim_ready) return 'VoWiFi 启动中 · IMS 未就绪'
+  return 'VoWiFi 未就绪'
+}
+
+const vowifiErrorText = (err?: string) => {
+  const text = String(err || '').trim()
+  if (!text) return ''
+  if (text.includes('epdg tunnel establishment timed out')) return ' · ePDG 隧道超时'
+  return ` · ${text}`
 }
 
 const devicePathText = (d: DeviceMgmtListItem) => {
   if (d?.interface) return d.interface
   if (d?.at_port) return 'AT'
   if (d?.control_device) return d.control_device
-  return '--'
+  return ''
 }
 </script>
 
@@ -99,24 +127,13 @@ const devicePathText = (d: DeviceMgmtListItem) => {
         <el-option label="排序：名称" value="name" />
         <el-option label="排序：信号" value="signal" />
       </el-select>
-      <el-select v-model="modelSortDir" size="small" placeholder="方向">
+      <el-select v-model="modelSortDir" size="small" placeholder="方向" class="col-span-2">
         <el-option label="升序" value="asc" />
         <el-option label="降序" value="desc" />
       </el-select>
-      <div v-if="deviceLimit > 0" class="flex items-center">
-        <el-tag
-          size="small"
-          :type="deviceCount >= deviceLimit ? 'warning' : 'info'"
-          class="w-full justify-center"
-        >
-          配额 {{ deviceCount }} / {{ deviceLimit }}
-        </el-tag>
-      </div>
     </div>
 
-    <ListSkeleton v-if="loading && filteredDevices.length === 0" :rows="8" />
-
-    <EmptyState v-else-if="filteredDevices.length === 0" title="暂无设备" subtitle="点击右上角“添加设备”开始接管" />
+    <EmptyState v-if="filteredDevices.length === 0" bare title="暂无设备" subtitle="点击右上角“添加设备”开始接管" />
 
     <div v-else class="device-list-scroll max-h-[65vh] overflow-y-auto pr-1">
       <div class="device-list-grid">
@@ -125,23 +142,25 @@ const devicePathText = (d: DeviceMgmtListItem) => {
             type="button"
             class="w-full h-full text-left p-3 rounded-xl border transition-all"
             :class="selectedId === d.id
-              ? 'border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-500/10'
+              ? 'border-primary-200 dark:border-primary-500/30 bg-primary-50/70 dark:bg-primary-500/10'
               : 'border-gray-100 dark:border-white/10 hover:bg-gray-50/60 dark:hover:bg-white/5'"
             @click="emit('select-device', d.id)"
           >
-            <div class="flex items-start justify-between gap-2">
-              <div class="min-w-0">
-                <div class="font-bold text-gray-800 dark:text-gray-100 truncate">{{ d.name || d.id }}</div>
-                <div class="text-xs text-gray-500 mt-0.5 truncate">
-                  {{ d.id }} · {{ devicePathText(d) }}
-                </div>
-                <div class="text-xs text-gray-400 mt-1 truncate">
-                  {{ secondaryStatus(d) }}
-                </div>
+            <div class="min-w-0">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 font-bold text-gray-800 dark:text-gray-100 truncate">{{ d.name || d.id }}</div>
+                <span
+                  class="inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-xs font-medium leading-5"
+                  :class="statusTagClass(primaryStatus(d).tone)"
+                >
+                  {{ primaryStatus(d).label }}
+                </span>
               </div>
-              <div class="flex items-center gap-2">
-                <StatusLight :tone="primaryStatus(d).tone" size="sm" :animated="primaryStatus(d).animated" />
-                <el-tag size="small" :type="primaryStatus(d).tag">{{ primaryStatus(d).label }}</el-tag>
+              <div class="text-xs text-gray-500 mt-0.5 truncate">
+                {{ [d.id, devicePathText(d)].filter(Boolean).join(' · ') }}
+              </div>
+              <div class="text-xs text-gray-400 mt-1 truncate">
+                {{ secondaryStatus(d) }}
               </div>
             </div>
           </button>

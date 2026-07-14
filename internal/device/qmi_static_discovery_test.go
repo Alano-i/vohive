@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -190,6 +191,48 @@ func TestDiscoverQMIDeviceFromSysFSAcceptsSierraQMIByCapability(t *testing.T) {
 	}
 	if got.ATPort != "" || got.ATPortBackup != "" || len(got.ATPorts) != 0 {
 		t.Fatalf("expected pure QMI without AT ports, got ATPort=%q backup=%q ports=%v", got.ATPort, got.ATPortBackup, got.ATPorts)
+	}
+}
+
+func TestDiscoverDJIBaiwangPrefersInterfaceTwoForAT(t *testing.T) {
+	usbPath := t.TempDir()
+	usbName := filepath.Base(usbPath)
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(usbPath, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("idVendor", "2ca3\n")
+	write("idProduct", "4006\n")
+	write("bNumInterfaces", "5\n")
+	for iface, tty := range []string{"ttyUSB20", "ttyUSB21", "ttyUSB22", "ttyUSB23"} {
+		if err := os.MkdirAll(filepath.Join(usbPath, usbName+":1."+strconv.Itoa(iface), "tty", tty), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	qmiPath := filepath.Join(usbPath, usbName+":1.4")
+	if err := os.MkdirAll(filepath.Join(qmiPath, "net", "wwan9"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(qmiPath, "usbmisc", "cdc-wdm9"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/tmp/qmi_wwan", filepath.Join(qmiPath, "driver")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := discoverQMIDeviceFromSysFS(usbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ATPort != "/dev/ttyUSB22" {
+		t.Fatalf("ATPort=%q want interface-2 port /dev/ttyUSB22", got.ATPort)
 	}
 }
 

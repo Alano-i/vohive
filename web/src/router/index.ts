@@ -23,6 +23,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/notifications',
+      name: 'NotificationCenter',
+      component: () => import('../views/NotificationCenter.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/devices',
       name: 'Devices',
       component: () => import('../views/Devices.vue'),

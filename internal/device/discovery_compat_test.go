@@ -386,6 +386,31 @@ func TestFindCDCWDMInUSBPath_FollowsUSBPathSymlink(t *testing.T) {
 	}
 }
 
+func TestUSBHardwareIDsFollowsUSBPathSymlink(t *testing.T) {
+	realUSBPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(realUSBPath, "idVendor"), []byte("2ca3\n"), 0o644); err != nil {
+		t.Fatalf("write idVendor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realUSBPath, "idProduct"), []byte("4006\n"), 0o644); err != nil {
+		t.Fatalf("write idProduct: %v", err)
+	}
+
+	linkParent := t.TempDir()
+	linkUSBPath := filepath.Join(linkParent, "1-4")
+	interfacePath := filepath.Join(realUSBPath, "1-4:1.4")
+	if err := os.MkdirAll(interfacePath, 0o755); err != nil {
+		t.Fatalf("create usb interface path: %v", err)
+	}
+	if err := os.Symlink(interfacePath, linkUSBPath); err != nil {
+		t.Fatalf("create usb path symlink: %v", err)
+	}
+
+	vendorID, productID := USBHardwareIDs(linkUSBPath)
+	if vendorID != 0x2ca3 || productID != 0x4006 {
+		t.Fatalf("USBHardwareIDs()=%04x:%04x, want 2ca3:4006", vendorID, productID)
+	}
+}
+
 func TestFindATPortsInUSBPathCollectsTTYUSBandTTYACM(t *testing.T) {
 	usbPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(usbPath, "1-2:1.2", "ttyUSB6"), 0o755); err != nil {

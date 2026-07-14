@@ -34,6 +34,21 @@ VoHive 把模组热插拔管理、SOCKS5/HTTP 代理编排、短信收发、VoWi
 
 ## 安装与卸载
 
+### 本地联合开发
+
+本机已安装 Go、Node.js 与 npm 后，执行：
+
+```sh
+make dev
+```
+
+该命令会自动创建被 Git 忽略的 `config/config.yaml`，并同时启动：
+
+- 前端开发服务器：`http://127.0.0.1:5173`，支持 Vue/Vite 热更新。
+- 后端 API：`http://127.0.0.1:7575`，修改 Go 或 YAML 文件后自动重新构建并启动。
+
+首次运行会下载后端热重载工具并按需安装前端依赖。默认开发账号为 `admin / admin`，按 `Ctrl+C` 可同时停止前后端。
+
 ### Debian 一键安装
 
 在 Debian 或 Debian 兼容系统上执行:

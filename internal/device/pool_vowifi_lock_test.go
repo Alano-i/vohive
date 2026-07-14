@@ -360,6 +360,36 @@ func TestClearVoWiFiStartupStateAndBroadcastNotifiesSubscribers(t *testing.T) {
 	}
 }
 
+func TestSendVoWiFiSMSUsesFailedRuntimeStateWithoutActiveInstance(t *testing.T) {
+	p := NewPool(&config.Config{})
+	deviceID := "dev-vowifi-failed"
+	p.voWiFiRuntimeStore().RecordStartupState(deviceID, runtimehost.State{
+		DeviceID:       deviceID,
+		Phase:          runtimehost.PhaseFailed,
+		SIMReady:       true,
+		AccessReady:    true,
+		LastErrorClass: "epdg",
+		LastError:      "epdg tunnel establishment timed out after 45s",
+		UpdatedAt:      time.Now(),
+	})
+
+	_, err := p.SendVoWiFiSMSWithResult(context.Background(), deviceID, "+1234567890", "hello")
+	if !errors.Is(err, ErrVoWiFiSMSNotReady) {
+		t.Fatalf("SendVoWiFiSMSWithResult() error = %v, want ErrVoWiFiSMSNotReady", err)
+	}
+	if !strings.Contains(err.Error(), "epdg tunnel establishment timed out after 45s") {
+		t.Fatalf("error %q should include last runtime error", err.Error())
+	}
+}
+
+func TestSendVoWiFiSMSWithoutRuntimeReturnsNotReady(t *testing.T) {
+	p := NewPool(&config.Config{})
+	_, err := p.SendVoWiFiSMSWithResult(context.Background(), "dev-not-started", "+1234567890", "hello")
+	if !errors.Is(err, ErrVoWiFiSMSNotReady) {
+		t.Fatalf("SendVoWiFiSMSWithResult() error = %v, want ErrVoWiFiSMSNotReady", err)
+	}
+}
+
 func TestStopVoWiFiAppForTeardownBroadcastsState(t *testing.T) {
 	p := NewPool(&config.Config{})
 	ch, unsub := p.SubscribeVoWiFiState("dev-2")

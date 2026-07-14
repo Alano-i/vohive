@@ -25,9 +25,13 @@ ARMV7_OUT = $(DIST_DIR)/$(BINARY_NAME)_$(VERSION_TAG)_linux_armv7
 UPX ?= $(shell command -v upx || command -v upx-ucl)
 UPX_FLAGS ?= --best --lzma
 
-.PHONY: all build build-amd64 build-arm64 build-armv7 build-all check-local-modules frontend-dist p release clean
+.PHONY: all build build-amd64 build-arm64 build-armv7 build-all check-local-modules frontend-dist dev p release clean
 
 all: build-all
+
+# 联合开发模式：Vite 负责前端 HMR，Air 负责 Go 后端热重载。
+dev:
+	@sh ./scripts/dev.sh
 
 build: build-amd64
 

@@ -168,7 +168,7 @@ watch(levelFilter, () => {
 </script>
 
 <template>
-  <div class="max-w-7xl mx-auto">
+  <div>
     <PageHeader title="实时日志" subtitle="查看系统运行日志，支持过滤和搜索">
       <template #actions>
         <div class="flex items-center gap-2">
@@ -224,7 +224,7 @@ watch(levelFilter, () => {
     <div class="ui-card overflow-hidden">
       <div
         ref="logContainer"
-        class="h-[60vh] overflow-auto font-mono text-sm bg-gray-900 dark:bg-black text-gray-100 p-4"
+        class="h-[60vh] overflow-auto font-mono text-[12px] bg-gray-900 dark:bg-black text-gray-100 p-4"
       >
         <div v-if="filteredLogs.length === 0" class="text-gray-500 text-center py-8">
           {{ connected ? '等待日志...' : '未连接到日志流' }}
@@ -236,7 +236,7 @@ watch(levelFilter, () => {
         >
           <span class="text-gray-500">[{{ formatDateTime(log.time) }}]</span>
           <span class="font-bold ml-1 inline-block w-14" :class="getLevelClass(log.level)">{{ log.level.toUpperCase().padEnd(5) }}</span>
-          <span class="text-indigo-400 inline-block w-48 truncate align-bottom" :title="log.caller">{{ log.caller }}</span>
+          <span class="text-primary-400 inline-block w-48 truncate align-bottom" :title="log.caller">{{ log.caller }}</span>
           <span class="text-gray-100 ml-1">{{ log.message }}</span>
           <span v-if="log.fields" class="text-amber-300/70 ml-1">{{ log.fields }}</span>
         </div>

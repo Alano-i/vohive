@@ -7,7 +7,6 @@ import PageHeader from '../components/PageHeader.vue'
 import ErrorState from '../components/ErrorState.vue'
 import RefreshButton from '../components/RefreshButton.vue'
 import DeviceListPanel from '../components/DeviceListPanel.vue'
-import DeviceDetailLoading from '../components/DeviceDetailLoading.vue'
 import DeviceDetailHeader from '../components/DeviceDetailHeader.vue'
 import DeviceOverviewTab from '../components/DeviceOverviewTab.vue'
 import DeviceEsimTab from '../components/DeviceEsimTab.vue'
@@ -23,8 +22,8 @@ import { useEventStream } from '../composables/useEventStream'
 import { useDevicesStore } from '../stores/devices'
 import { debugCollector } from '../debug/collector'
 import { copyToClipboard } from '../utils/clipboard'
-import { isWwanQmiControlPath } from '../utils/deviceBackend'
-import { isControlOnline, isRecoveryPhase } from '../utils/deviceLifecycle'
+import { isWwanQmiControlPath, preferredBackendForDiscovery } from '../utils/deviceBackend'
+import { isControlOnline, isRecoveryPhase, isSIMMissing } from '../utils/deviceLifecycle'
 import { getMccMncIndex, isoToFlagEmoji, type MccMncRow } from '../utils/mcc-mnc'
 import type { CardPolicy, CarrierWebsheetInfo, DeviceConfigDTO, DeviceMgmtListItem, DeviceOverviewItem, DiscoveredDevice, ModemStatus, PNNRecord, RealtimeTrafficSnapshot } from '../types/api'
 import type { AppError } from '../types/domain'
@@ -40,7 +39,7 @@ import {
 const router = useRouter()
 const route = useRoute()
 const devicesStore = useDevicesStore()
-const { list: storeList, detail: storeDetail, discovered: storeDiscovered, config: storeConfig, deviceLimit } = storeToRefs(devicesStore)
+const { list: storeList, detail: storeDetail, discovered: storeDiscovered, config: storeConfig } = storeToRefs(devicesStore)
 
 let listAbort: AbortController | null = null
 let detailAbort: AbortController | null = null
@@ -52,6 +51,7 @@ const detailPollWarned = ref(false)
 const listPollWarned = ref(false)
 
 const loading = ref(true)
+const refreshing = ref(false)
 const activeTab = ref('overview')
 const loadLastOkAt = ref<number | null>(null)
 const loadError = ref<{ message: string; status?: number; method?: string; url?: string } | null>(null)
@@ -65,6 +65,7 @@ const selectedId = ref('')
 const selectedDetail = ref<DeviceOverviewItem | null>(null)
 const hasAutoSelected = ref(false)
 const deviceTabs = new Set(['overview', 'esim', 'at', 'ussd', 'config', 'card'])
+const esimCapableDeviceIds = ref(new Set<string>())
 
 const editConfig = ref<DeviceConfigDTO | null>(null)
 const editBaseline = ref('')
@@ -125,9 +126,9 @@ const filteredDevices = computed<DeviceMgmtListItem[]>(() => {
   let list = devices.value.slice()
 
   if (statusFilter.value === 'online') {
-    list = list.filter(d => isControlOnline(d))
+    list = list.filter(d => isControlOnline(d) && !isSIMMissing(d))
   } else if (statusFilter.value === 'offline') {
-    list = list.filter(d => !d?.running && !isRecoveryPhase(d.lifecycle_phase))
+    list = list.filter(d => (!d?.running && !isRecoveryPhase(d.lifecycle_phase)) || isSIMMissing(d))
   }
 
   if (q) {
@@ -166,6 +167,16 @@ const selectedDevice = computed<DeviceOverviewItem | null>(() => {
   return selectedDetail.value
 })
 
+const lastKnownSIMIdentityByDevice = reactive(new Map<string, { iccid: string; imsi: string }>())
+const selectedDeviceEsimCapable = computed(() => esimCapableDeviceIds.value.has(selectedId.value))
+const selectedPolicyICCID = computed(() => {
+  const detailICCID = String(selectedDetail.value?.modem?.iccid || '').trim()
+  if (detailICCID) return detailICCID
+  const listICCID = String(selectedListItem.value?.modem?.iccid || '').trim()
+  if (listICCID) return listICCID
+  return String(lastKnownSIMIdentityByDevice.get(selectedId.value)?.iccid || '').trim()
+})
+
 const RADIO_LIVE_GRACE_MS = 3000
 
 type LiveRadioFields = Pick<
@@ -199,13 +210,33 @@ function applyRouteSelection(): boolean {
   }
 
   const deviceID = firstQueryValue(route.query.device).trim()
-  if (!deviceID || selectedId.value === deviceID) {
+  if (!deviceID) {
+    const firstID = filteredDevices.value[0]?.id || ''
+    if (!firstID || selectedId.value === firstID) return false
+    selectedId.value = firstID
+    hasAutoSelected.value = true
+    return true
+  }
+  if (!devices.value.some(device => device.id === deviceID) || selectedId.value === deviceID) {
     return false
   }
 
   selectedId.value = deviceID
   hasAutoSelected.value = true
   return true
+}
+
+function ensureSelectedTabAvailable() {
+  if (activeTab.value !== 'esim' || selectedDeviceEsimCapable.value) return
+  activeTab.value = 'overview'
+  void router.replace({
+    name: 'Devices',
+    query: {
+      ...route.query,
+      device: selectedId.value || undefined,
+      tab: 'overview'
+    }
+  })
 }
 
 function nativeMccMnc(modem: ModemStatus | undefined): string {
@@ -332,6 +363,23 @@ function resolveDetailForDisplay(detail: DeviceOverviewItem | null): DeviceOverv
   if (!detail) {
     clearLiveRadioFallbackTimer()
     return null
+  }
+
+  const detailID = detail.id
+  const listModem = devices.value.find(device => device.id === detailID)?.modem
+  const previousIdentity = lastKnownSIMIdentityByDevice.get(detailID)
+  const iccid = String(detail.modem?.iccid || listModem?.iccid || previousIdentity?.iccid || '').trim()
+  const imsi = String(detail.modem?.imsi || previousIdentity?.imsi || '').trim()
+  if (iccid || imsi) {
+    lastKnownSIMIdentityByDevice.set(detailID, { iccid, imsi })
+    detail = {
+      ...detail,
+      modem: {
+        ...detail.modem,
+        iccid,
+        imsi
+      }
+    }
   }
 
   if (detail.radio_live_ok === true) {
@@ -603,13 +651,13 @@ async function fetchCardPolicy(iccid: string | undefined) {
 // 卡策略热切换后：刷新卡策略 + 概览详情（让概览即时反映网络/VoWiFi/飞行模式面板切换）
 async function onCardPolicyChanged() {
   await Promise.all([
-    fetchCardPolicy(selectedDetail.value?.modem?.iccid),
+    fetchCardPolicy(selectedPolicyICCID.value),
     refreshSelectedDetailOnly()
   ])
 }
 
 watch(
-  () => selectedDetail.value?.modem?.iccid,
+  selectedPolicyICCID,
   (iccid) => { void fetchCardPolicy(iccid) },
   { immediate: true }
 )
@@ -627,16 +675,29 @@ async function fetchAll() {
     const prevSelected = selectedId.value
     if (listAbort) listAbort.abort()
     listAbort = new AbortController()
-    const listResult = await devicesStore.fetchList(listAbort.signal)
+    const [listResult, capabilityResult] = await Promise.all([
+      devicesStore.fetchList(listAbort.signal),
+      devicesService.getSMSProfiles()
+    ])
     if (!listResult.ok) throw new Error(listResult.error.message)
     devices.value = (storeList.value || []) as DeviceMgmtListItem[]
+		// Capability is hardware-stable. A transient worker/eUICC query failure
+		// must not remove the eSIM tab after this device has already proved it is
+		// eSIM-capable.
+		if (capabilityResult.ok) {
+			esimCapableDeviceIds.value = new Set([
+				...esimCapableDeviceIds.value,
+				...capabilityResult.data.esimDeviceIds
+			])
+		}
     loadLastOkAt.value = Date.now()
     applyRouteSelection()
 
     if (!hasAutoSelected.value && !selectedId.value && devices.value.length) {
-      selectedId.value = devices.value[0].id
+      selectedId.value = filteredDevices.value[0]?.id || ''
       hasAutoSelected.value = true
     }
+    ensureSelectedTabAvailable()
     // 移除强行重置 selectedId 的逻辑，因为这会在轮询期间当设备短暂拿不到时，把界面强制拉回到第一项。
     const selectedStillExists = selectedId.value
       ? devices.value.some(d => d.id === selectedId.value)
@@ -668,6 +729,16 @@ async function fetchAll() {
   }
 }
 
+async function refreshAll() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await fetchAll()
+  } finally {
+    refreshing.value = false
+  }
+}
+
 async function refreshListOnly() {
   try {
     const prevSelected = selectedId.value
@@ -679,7 +750,7 @@ async function refreshListOnly() {
     // 自动刷新时如果当前选中的设备突然不在列表中，不要强行将其重置。
     // 这可以避免正在配置某设备时，因为网络或拔插一秒钟的掉线导致系统强制关闭当前配置并把页面顶上去拉回到第一项。
     if (!hasAutoSelected.value && !selectedId.value && devices.value.length) {
-      selectedId.value = devices.value[0]?.id || ''
+      selectedId.value = filteredDevices.value[0]?.id || ''
       hasAutoSelected.value = !!selectedId.value
     }
     const selectedStillExists = selectedId.value
@@ -743,6 +814,7 @@ async function selectDevice(id: string) {
   if (selectedId.value === next && selectedDetail.value) return
   selectedId.value = next
   hasAutoSelected.value = true
+  ensureSelectedTabAvailable()
   void router.replace({
     name: 'Devices',
     query: {
@@ -759,6 +831,7 @@ watch(
   () => {
     const selectionChanged = applyRouteSelection()
     if (!selectionChanged) return
+    ensureSelectedTabAvailable()
     void Promise.all([
       fetchSelectedDetail(selectedId.value),
       syncEditConfigFromSelected()
@@ -873,6 +946,7 @@ async function rebootModem() {
 
 // 手动触发设备重新扫描
 async function rescanDevices() {
+  if (rescanning.value) return
   rescanning.value = true
   try {
     const result = await devicesService.rescanAll()
@@ -982,7 +1056,7 @@ async function refreshDiscoveredForAdd() {
   }
 }
 
-function applyDiscoveredToAddConfig(d: DiscoveredDevice | null) {
+function applyDiscoveredToAddConfig(d: DiscoveredDevice | null, preserveBackend = false) {
   if (!d) return
   addConfig.value.interface = d.net_interface || ''
   addConfig.value.at_port = d.at_port || ''
@@ -990,13 +1064,8 @@ function applyDiscoveredToAddConfig(d: DiscoveredDevice | null) {
   addConfig.value.modem_imei = d.imei || ''
   addConfig.value.usb_path = d.usb_path || ''
 
-  const mode = String(d.mode || '').toLowerCase()
-  if (mode === 'mbim') {
-    addConfig.value.device_backend = 'mbim'
-  } else if (isWwanQmiControlPath(d.control_path) || (mode === 'qmi' && d.control_path)) {
-    addConfig.value.device_backend = 'qmi'
-  } else {
-    addConfig.value.device_backend = 'at'
+  if (!preserveBackend) {
+    addConfig.value.device_backend = preferredBackendForDiscovery(d)
   }
 }
 
@@ -1016,7 +1085,7 @@ async function addDevice() {
       ElMessage.warning('请选择一个未配置设备')
       return
     }
-    applyDiscoveredToAddConfig(addSelected.value)
+    applyDiscoveredToAddConfig(addSelected.value, true)
     const result = await devicesService.addManaged(addConfig.value)
     if (!result.ok) throw new Error(result.error.message || '添加失败')
     const warning = result.data.warning
@@ -1088,6 +1157,10 @@ watch(
 )
 
 watch(activeTab, (tab, prevTab) => {
+  if (tab === 'esim' && !selectedDeviceEsimCapable.value) {
+    ensureSelectedTabAvailable()
+    return
+  }
   if (tab === 'overview' && prevTab !== 'overview') {
     refreshCurrentDeviceTrafficAnalysis()
   }
@@ -1195,13 +1268,13 @@ usePollingScheduler(async () => {
 </script>
 
 <template>
-  <div class="devices-page max-w-7xl mx-auto">
+  <div class="devices-page">
     <PageHeader title="设备管理" subtitle="查看设备信息、编辑配置、执行 AT 指令">
       <template #actions>
         <div class="flex items-center gap-2">
-          <RefreshButton :loading="loading" @click="fetchAll" />
-          <el-button @click="rescanDevices" :loading="rescanning" class="ui-glass-border !border-0">
-            <el-icon><ArrowSync24Regular /></el-icon>
+          <RefreshButton :loading="refreshing" @click="refreshAll" />
+          <el-button @click="rescanDevices" :aria-busy="rescanning ? 'true' : 'false'" class="ui-glass-border !border-0">
+            <el-icon :class="{ 'refresh-icon-spinning': rescanning }"><ArrowSync24Regular /></el-icon>
             重新扫描
           </el-button>
           <el-button type="primary" @click="openAddDialog" class="!border-0">
@@ -1227,15 +1300,12 @@ usePollingScheduler(async () => {
 
     <div class="devices-layout">
       <DeviceListPanel
-        :loading="loading"
         :query="query"
         :status-filter="statusFilter"
         :sort-key="sortKey"
         :sort-dir="sortDir"
         :selected-id="selectedId"
         :filtered-devices="filteredDevices"
-        :device-count="devices.length"
-        :device-limit="deviceLimit"
         @update:query="query = $event"
         @update:status-filter="statusFilter = $event"
         @update:sort-key="sortKey = $event"
@@ -1286,7 +1356,7 @@ usePollingScheduler(async () => {
                 />
               </div>
             </el-tab-pane>
-            <el-tab-pane label="eSIM" name="esim" lazy>
+            <el-tab-pane v-if="selectedDeviceEsimCapable" label="eSIM" name="esim" lazy>
               <DeviceEsimTab :device-id="selectedDevice.id" :device-imei="selectedDevice.modem?.imei || ''" :is-active="activeTab === 'esim'" :device-online="selectedDevice.running === true" />
             </el-tab-pane>
             <el-tab-pane label="AT 终端" name="at" lazy>
@@ -1303,7 +1373,7 @@ usePollingScheduler(async () => {
             <el-tab-pane label="卡策略" name="card" lazy>
               <CardPolicyPanel
                 :device-id="selectedDevice.id"
-                :iccid="selectedDetail?.modem?.iccid"
+                :iccid="selectedPolicyICCID"
                 :policy="cardPolicy"
                 :device-online="selectedDevice.running === true"
                 @policy-changed="onCardPolicyChanged"
@@ -1324,8 +1394,7 @@ usePollingScheduler(async () => {
       </div>
 
       <div v-else>
-        <DeviceDetailLoading v-if="loading" />
-        <div v-else class="ui-card p-8 text-gray-500 dark:text-gray-400">
+        <div class="ui-card p-8 text-gray-500 dark:text-gray-400">
           暂无设备
         </div>
       </div>
@@ -1362,7 +1431,7 @@ usePollingScheduler(async () => {
 
 @container (min-width: 980px) {
   .devices-layout {
-    grid-template-columns: 270px minmax(0, 1fr);
+    grid-template-columns: 320px minmax(0, 1fr);
   }
 }
 

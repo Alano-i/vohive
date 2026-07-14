@@ -28,8 +28,8 @@ func logVoWiFiFailureSummary(traceID, deviceID, stage, errorClass, reason string
 }
 
 func (p *Pool) handleVoWiFiStartupError(traceID, deviceID, runtimeEPDGOverride string, generation uint64, enableStart time.Time, w *Worker, state runtimehost.State, err error) error {
-	defer p.clearVoWiFiStartupStateAndBroadcast(deviceID)
 	if errors.Is(err, apduarbiter.ErrAPDUBusy) {
+		p.clearVoWiFiStartupStateAndBroadcast(deviceID)
 		logger.Debug("VoWiFi 启动遇到 APDU busy，等待短退避恢复",
 			"trace_id", traceID,
 			"device", deviceID,

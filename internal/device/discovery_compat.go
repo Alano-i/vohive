@@ -298,6 +298,48 @@ func resolveUSBPathForScan(usbPath string) string {
 	return resolved
 }
 
+// USBHardwareIDs returns the USB vendor and product IDs for a live device path.
+// The path may point at a USB interface or class-device symlink, so walk up to
+// the physical USB device that owns idVendor and idProduct.
+func USBHardwareIDs(usbPath string) (uint16, uint16) {
+	scanPath := resolveUSBPathForScan(usbPath)
+	for scanPath != "" {
+		vendorID := readHexFile16(filepath.Join(scanPath, "idVendor"))
+		productID := readHexFile16(filepath.Join(scanPath, "idProduct"))
+		if vendorID != 0 || productID != 0 {
+			return vendorID, productID
+		}
+		parent := filepath.Dir(scanPath)
+		if parent == scanPath {
+			break
+		}
+		scanPath = parent
+	}
+	return 0, 0
+}
+
+// USBHardwareIDsForDevice resolves hardware IDs from whichever live path the
+// worker currently has. Network, usbmisc and tty class paths all converge on
+// the same physical USB parent.
+func USBHardwareIDsForDevice(usbPath, netInterface, controlPath, atPort string) (uint16, uint16) {
+	candidates := []string{strings.TrimSpace(usbPath)}
+	if name := filepath.Base(strings.TrimSpace(netInterface)); name != "." && name != "" {
+		candidates = append(candidates, filepath.Join("/sys/class/net", name, "device"))
+	}
+	if name := filepath.Base(strings.TrimSpace(controlPath)); name != "." && name != "" {
+		candidates = append(candidates, filepath.Join("/sys/class/usbmisc", name, "device"))
+	}
+	if name := filepath.Base(strings.TrimSpace(atPort)); name != "." && name != "" {
+		candidates = append(candidates, filepath.Join("/sys/class/tty", name, "device"))
+	}
+	for _, candidate := range candidates {
+		if vendorID, productID := USBHardwareIDs(candidate); vendorID != 0 || productID != 0 {
+			return vendorID, productID
+		}
+	}
+	return 0, 0
+}
+
 func findATPortsInUSBPath(usbPath string) []string {
 	ports := make([]string, 0)
 	for _, ttyPattern := range []string{"ttyUSB*", "ttyACM*"} {

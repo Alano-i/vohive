@@ -95,7 +95,7 @@ func requiresMBIMCore(cfg config.DeviceConfig) bool {
 func resolveDiscoveredQMIDevice(dev QMIDevice, timeout time.Duration, allowQMIIMEIProbe bool) (QMIDevice, string) {
 	qmiClientOptions, allowQMIProbe := qmicore.DiscoveryClientOptionsForControlDevice(dev.ControlPath)
 	return EnrichDiscoveredQMIDevice(dev, QMIDeviceEnrichOptions{
-		EnableATProbe:      false,
+		EnableATProbe:      true,
 		ATProbeTimeout:     timeout,
 		EnableQMIIMEIProbe: allowQMIIMEIProbe && allowQMIProbe,
 		QMIClientOptions:   qmiClientOptions,
@@ -106,7 +106,7 @@ var resolveDiscoveredQMIDeviceFn = resolveDiscoveredQMIDevice
 
 func resolveDiscoveredQMIDeviceWithConfig(dev QMIDevice, timeout time.Duration, allowQMIIMEIProbe bool, cfg config.DeviceConfig) (QMIDevice, string) {
 	return EnrichDiscoveredQMIDevice(dev, QMIDeviceEnrichOptions{
-		EnableATProbe:      false,
+		EnableATProbe:      true,
 		ATProbeTimeout:     timeout,
 		EnableQMIIMEIProbe: allowQMIIMEIProbe,
 		QMIClientOptions:   qmicore.ClientOptionsFromDeviceConfig(cfg),
@@ -204,10 +204,6 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 	if p.rebuilding[devCfg.ID] {
 		p.mu.Unlock()
 		return nil, fmt.Errorf("设备 %s 正在初始化中，请勿重复触发", devCfg.ID)
-	}
-	if FreeDeviceLimitReached(len(p.workers)) {
-		p.mu.Unlock()
-		return nil, fmt.Errorf("%s", FreeDeviceWorkerLimitMessage())
 	}
 	p.rebuilding[devCfg.ID] = true
 	attempt := p.beginRebuildAttemptLocked(devCfg.ID)
@@ -527,6 +523,27 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 	if backendUsesATRuntime(backendMode) {
 		m.SetOnDisconnectWithReason(func(reason string) {
 			devID := w.ID
+			// RemoveWorker closes the AT port as part of an intentional teardown. The
+			// serial read goroutine can observe that close before it observes w.stop;
+			// never let the stale worker turn this expected read error into another
+			// recovery cycle for the replacement worker.
+			if current := p.GetWorker(devID); current != w {
+				logger.Debug("忽略已移除 Worker 的 AT 掉线回调", "device", devID, "reason", reason)
+				return
+			}
+			// DJI/Baiwang uses AT as an auxiliary identity/status channel and QMI
+			// as the authoritative physical/control attachment. An AT hangup must
+			// never evict the whole hybrid worker, even while data is disabled:
+			// doing so clears ICCID/eSIM state and starts the cross-device rebuild
+			// loop. A real unplug/QMI transport failure is handled independently by
+			// the QMI health path.
+			if workerUsesQMIHealthPolicy(w) {
+				logger.Warn("AT 辅助控制口掉线，保留 QMI Worker 与 SIM 身份缓存",
+					"device", devID,
+					"reason", reason,
+					"network_connected", w.NetworkConnected())
+				return
+			}
 			if strings.TrimSpace(reason) == "" {
 				reason = "modem_disconnect"
 			}

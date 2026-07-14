@@ -1,6 +1,6 @@
 import { api } from '../stores/auth'
 import { callService } from './http'
-import type { CarrierWebsheetInfo, DeviceConfigDTO, DiscoveredDevice, EsimNotificationItem, EsimOverviewResponse, EsimSpaceDelta } from '../types/api'
+import type { CarrierWebsheetInfo, DeviceConfigDTO, DiscoveredDevice, EsimEUICCProfiles, EsimNotificationItem, EsimOverviewResponse, EsimSpaceDelta, SMSProfileDevice } from '../types/api'
 import type { DeviceDetailVM, DeviceListVM } from '../types/view-model'
 import axios from 'axios'
 
@@ -55,6 +55,16 @@ type UssdResponse = {
 const ESIM_BUSY_CODE = 'ESIM_BUSY'
 const ESIM_BUSY_RETRY_DELAYS = [300, 600, 1200]
 
+function normalizeEsimProfileGroups(value: unknown): EsimEUICCProfiles[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((group): group is EsimEUICCProfiles => !!group && typeof group === 'object')
+    .map(group => ({
+      ...group,
+      profiles: Array.isArray(group.profiles) ? group.profiles : []
+    }))
+}
+
 type EsimBusyErrorMeta = {
   busy: boolean
   retryAfterMs: number
@@ -105,8 +115,7 @@ export const devicesService = {
     return callService(async () => {
       const res = await api.get('/devices', { signal })
       return {
-        devices: (res.data?.devices || []) as DeviceListVM[],
-        deviceLimit: (typeof res.data?.device_limit === 'number' ? res.data.device_limit : 0) as number,
+        devices: (res.data?.devices || []) as DeviceListVM[]
       }
     })
   },
@@ -312,7 +321,7 @@ export const devicesService = {
       }))
       return {
         chipInfo: res.data?.chip_info || null,
-        profiles: res.data?.profiles || []
+        profiles: normalizeEsimProfileGroups(res.data?.profiles)
       }
     })
   },
@@ -322,7 +331,30 @@ export const devicesService = {
         signal: options?.signal,
         params: options?.refresh ? { refresh: true } : undefined
       }))
-      return (res.data || [])
+      return normalizeEsimProfileGroups(res.data)
+    })
+  },
+  getSMSProfiles() {
+    return callService(async () => {
+      const res = await api.get<{ profiles?: SMSProfileDevice[]; esim_device_ids?: string[] }>('/sms/profiles')
+      return {
+        profiles: res.data?.profiles || [],
+        esimDeviceIds: Array.isArray(res.data?.esim_device_ids) ? res.data.esim_device_ids : []
+      }
+    })
+  },
+  getEsimProfilePhone(iccid: string) {
+    return callService(async () => {
+      const res = await api.get<{ phone_number?: string }>(`/sms/profiles/${iccid}/phone`)
+      return String(res.data?.phone_number || '')
+    })
+  },
+  setEsimProfilePhone(iccid: string, phoneNumber: string) {
+    return callService(async () => {
+      const res = await api.put<{ phone_number?: string }>(`/sms/profiles/${iccid}/phone`, {
+        phone_number: phoneNumber
+      })
+      return String(res.data?.phone_number || '')
     })
   },
   getEsimNotifications(id: string, options?: { aidHex?: string; signal?: AbortSignal }) {

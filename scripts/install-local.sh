@@ -130,6 +130,7 @@ Restart=always
 RestartSec=5s
 Environment=CONFIG_PATH=${CONFIG_FILE}
 Environment=HOME=${WORK_DIR}
+Environment=VOHIVE_VOWIFI_ENABLE_SWU=1
 LimitCORE=0
 
 [Install]
@@ -151,8 +152,13 @@ set -eu
 
 VID="2ca3"
 PID="4006"
+QMI_INTERFACE="4"
 
 modprobe option || exit 0
+modprobe qmi_wwan || exit 0
+
+printf '%s %s' "$VID" "$PID" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true
+printf '%s %s' "$VID" "$PID" > /sys/bus/usb/drivers/qmi_wwan/new_id 2>/dev/null || true
 
 for usb in /sys/bus/usb/devices/*; do
 	[ -f "$usb/idVendor" ] || continue
@@ -163,23 +169,24 @@ for usb in /sys/bus/usb/devices/*; do
 	base="$(basename "$usb")"
 	for intf in "$usb"/${base}:1.*; do
 		[ -d "$intf" ] || continue
+		interface_number="${intf##*.}"
+		if [ "$interface_number" = "$QMI_INTERFACE" ]; then
+			target_driver="qmi_wwan"
+		else
+			target_driver="option"
+		fi
 		if [ -w "$intf/driver_override" ]; then
-			printf 'option' > "$intf/driver_override" || true
+			printf '%s' "$target_driver" > "$intf/driver_override" || true
 		fi
 		if [ -L "$intf/driver" ]; then
 			drv="$(basename "$(readlink "$intf/driver")")"
-			if [ "$drv" != "option" ]; then
+			if [ "$drv" != "$target_driver" ]; then
 				printf '%s' "$(basename "$intf")" > "$intf/driver/unbind" 2>/dev/null || true
 			fi
 		fi
-	done
-
-	printf '%s %s' "$VID" "$PID" > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true
-
-	for intf in "$usb"/${base}:1.*; do
-		[ -d "$intf" ] || continue
-		[ -L "$intf/driver" ] && continue
-		printf '%s' "$(basename "$intf")" > /sys/bus/usb/drivers_probe 2>/dev/null || true
+		if [ ! -L "$intf/driver" ] && [ -w "/sys/bus/usb/drivers/$target_driver/bind" ]; then
+			printf '%s' "$(basename "$intf")" > "/sys/bus/usb/drivers/$target_driver/bind" 2>/dev/null || true
+		fi
 	done
 done
 EOF

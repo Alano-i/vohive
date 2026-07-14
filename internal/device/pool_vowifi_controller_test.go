@@ -203,6 +203,32 @@ func TestHandleVoWiFiStartupErrorAPDUBusyStaysBelowWarn(t *testing.T) {
 	}
 }
 
+func TestHandleVoWiFiStartupErrorKeepsFailureRuntimeState(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	deviceID := "dev-epdg-timeout"
+	p.voWiFiRuntimeStore().RecordStartupState(deviceID, runtimehost.State{
+		DeviceID:       deviceID,
+		Phase:          runtimehost.PhaseFailed,
+		LastErrorClass: "epdg",
+		LastError:      "epdg tunnel establishment timed out after 45s",
+		UpdatedAt:      time.Now(),
+	})
+
+	err := errors.New("epdg tunnel establishment timed out after 45s")
+	if got := p.handleVoWiFiStartupError("trace-epdg", deviceID, "", 0, time.Now(), &Worker{ID: deviceID}, runtimehost.State{LastErrorClass: "epdg"}, err); got == nil {
+		t.Fatal("handleVoWiFiStartupError() error = nil, want failure")
+	}
+
+	state, ok := p.GetVoWiFiRuntimeState(deviceID)
+	if !ok {
+		t.Fatal("expected failed runtime state to remain visible")
+	}
+	if state.Phase != runtimehost.PhaseFailed || state.LastError != err.Error() {
+		t.Fatalf("runtime state = %+v, want failed state with last error", state)
+	}
+}
+
 func drainLoggerEntries(ch <-chan logger.LogEntry) []logger.LogEntry {
 	entries := make([]logger.LogEntry, 0)
 	for {

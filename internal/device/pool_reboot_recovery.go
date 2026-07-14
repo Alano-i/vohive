@@ -360,7 +360,7 @@ func modemRebootRecoveryShouldRebuildAfterTransportDown(worker *Worker, err erro
 
 func (p *Pool) ScheduleModemRebootRecovery(deviceID string, reason string) {
 	opts := defaultModemRebootRecoveryOptions(deviceID, reason)
-	if strings.TrimSpace(reason) == "manual_reboot" {
+	if normalized := strings.TrimSpace(reason); normalized == "manual_reboot" || normalized == "network_enable_qmi_recovery" {
 		opts.delays = manualRebootRecoveryDelays()
 	}
 	go p.runModemRebootRecovery(opts)
@@ -542,7 +542,6 @@ func (p *Pool) runModemRebootRecovery(opts modemRebootRecoveryOptions) {
 		} else {
 			err = p.rescanAndReconnect(rescanReconnectOptions{
 				targetDeviceID: opts.deviceID,
-				manualReboot:   strings.TrimSpace(opts.reason) == "manual_reboot",
 			})
 		}
 		if err != nil {
@@ -590,6 +589,13 @@ func (p *Pool) runModemRebootRecovery(opts modemRebootRecoveryOptions) {
 					p.startQMIIdentityConvergence(worker, opts.reason)
 					return
 				}
+				continue
+			}
+			if requiresQMICore(worker.Config) && !qmiWorkerControlReady(worker) {
+				logger.Info("模组重启恢复：SIM 身份已恢复，等待 QMI 控制面就绪",
+					"device", opts.deviceID,
+					"round", round+1,
+					"reason", opts.reason)
 				continue
 			}
 			logger.Info("模组重启恢复成功", "device", opts.deviceID, "round", round+1)

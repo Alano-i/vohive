@@ -61,7 +61,7 @@ func TestEnrichDiscoveredQMIDeviceHonorsQMIIMEIProbeFlag(t *testing.T) {
 	}
 }
 
-func TestResolveDiscoveredQMIDeviceDoesNotProbeATPort(t *testing.T) {
+func TestResolveDiscoveredQMIDeviceUsesATBeforeQMI(t *testing.T) {
 	origATProbe := probeIMEICachedFn
 	origQMIProbe := probeIMEIViaQMIFn
 	t.Cleanup(func() {
@@ -70,12 +70,14 @@ func TestResolveDiscoveredQMIDeviceDoesNotProbeATPort(t *testing.T) {
 	})
 
 	atCalls := 0
+	qmiCalls := 0
 	probeIMEICachedFn = func(atPort string, timeout time.Duration) (string, error) {
 		atCalls++
-		return "should-not-use-at", nil
+		return "867123456789012", nil
 	}
 	probeIMEIViaQMIFn = func(controlPath string, opts qmiq.ClientOptions) (string, error) {
-		return "867123456789012", nil
+		qmiCalls++
+		return "should-not-use-qmi", nil
 	}
 
 	dev := QMIDevice{
@@ -85,8 +87,11 @@ func TestResolveDiscoveredQMIDeviceDoesNotProbeATPort(t *testing.T) {
 	}
 
 	_, imei := resolveDiscoveredQMIDevice(dev, 50*time.Millisecond, true)
-	if atCalls != 0 {
-		t.Fatalf("AT probe calls = %d, want 0 for pure QMI discovery", atCalls)
+	if atCalls != 1 {
+		t.Fatalf("AT probe calls = %d, want 1", atCalls)
+	}
+	if qmiCalls != 0 {
+		t.Fatalf("QMI probe calls = %d, want 0 when AT identity is available", qmiCalls)
 	}
 	if imei != "867123456789012" {
 		t.Fatalf("imei=%q want QMI-derived IMEI", imei)

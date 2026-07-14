@@ -111,9 +111,9 @@ const {
     <div v-if="loading" class="text-xs text-gray-400 flex items-center gap-1">
       <el-icon class="animate-spin"><Loading /></el-icon> 正在加载策略...
     </div>
-    <div v-else-if="loadFailed" class="text-xs text-orange-500 flex items-center gap-2">
+    <div v-else-if="loadFailed" class="text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
       策略加载失败
-      <el-button size="small" text @click="loadPolicy">重试</el-button>
+      <el-button size="small" type="danger" plain @click="loadPolicy">重试</el-button>
     </div>
     <template v-else>
       <div v-if="hint" class="text-[11px] text-amber-600 dark:text-amber-400">{{ hint }}</div>

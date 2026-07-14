@@ -2,7 +2,7 @@ import type { DeviceLifecyclePhase, DeviceMgmtListItem, DeviceOverviewItem } fro
 
 type DeviceLike = Pick<
   DeviceMgmtListItem | DeviceOverviewItem,
-  'running' | 'healthy' | 'control_online' | 'lifecycle_phase' | 'modem'
+  'running' | 'healthy' | 'control_online' | 'lifecycle_phase' | 'network_enabled' | 'modem'
 >
 
 export function isRecoveryPhase(phase?: DeviceLifecyclePhase) {
@@ -23,6 +23,10 @@ export function isControlOnline(device: DeviceLike | null | undefined) {
 export function isRadioRegistered(device: DeviceLike | null | undefined) {
   const r = device?.modem?.reg_status
   return r === 1 || r === 5
+}
+
+export function isSIMMissing(device: DeviceLike | null | undefined) {
+  return device?.running === true && device.modem?.sim_inserted === false
 }
 
 export function lifecycleStatusLabel(phase?: DeviceLifecyclePhase) {
@@ -51,15 +55,27 @@ export function lifecycleStatusLabel(phase?: DeviceLifecyclePhase) {
 }
 
 export function primaryLifecycleStatus(device: DeviceLike | null | undefined) {
-  const phase = device?.lifecycle_phase
-  if (isRecoveryPhase(phase)) {
-    return { label: lifecycleStatusLabel(phase) || '恢复中', tag: 'warning' as const, tone: 'warning' as const, animated: true }
+	const phase = device?.lifecycle_phase
+	if (!device?.running) {
+    return { label: '离线', tag: 'danger' as const, tone: 'danger' as const, animated: false }
   }
+	if (isSIMMissing(device)) {
+    return { label: '离线', tag: 'danger' as const, tone: 'danger' as const, animated: false }
+	}
+	// QMI core is an internal control-plane dependency. When the user has
+	// explicitly disabled data, its background convergence must not be shown as
+	// if the data network were starting.
+	if (phase === 'qmi_starting' && device.network_enabled === false) {
+		return { label: '在线', tag: 'success' as const, tone: 'success' as const, animated: true }
+	}
+	if (isRadioRegistered(device) && (device.control_online ?? device.healthy) === true) {
+		return { label: '在线', tag: 'success' as const, tone: 'success' as const, animated: true }
+	}
+	if (isRecoveryPhase(phase)) {
+		return { label: lifecycleStatusLabel(phase) || '恢复中', tag: 'warning' as const, tone: 'warning' as const, animated: true }
+	}
   if (phase === 'degraded') {
     return { label: '不稳定', tag: 'warning' as const, tone: 'warning' as const, animated: true }
-  }
-  if (!device?.running) {
-    return { label: '离线', tag: 'danger' as const, tone: 'danger' as const, animated: false }
   }
   if (!isControlOnline(device)) {
     return { label: '恢复中', tag: 'warning' as const, tone: 'warning' as const, animated: true }

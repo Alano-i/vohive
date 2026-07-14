@@ -110,6 +110,7 @@ func (m *Manager) StartRuntime(ctx context.Context, req RuntimeStartRequest) (Ru
 		},
 	})
 	if err != nil {
+		m.FailStart(deviceID, req.Epoch, failedRuntimeState(deviceID, req.Prepared.StartupState, inst, err), err)
 		return RuntimeStartResult{}, err
 	}
 
@@ -130,4 +131,33 @@ func (m *Manager) StartRuntime(ctx context.Context, req RuntimeStartRequest) (Ru
 	}
 
 	return RuntimeStartResult{Instance: inst}, nil
+}
+
+func failedRuntimeState(deviceID string, fallback runtimehost.State, inst *runtimehost.Instance, err error) runtimehost.State {
+	state := runtimehost.State{}
+	if inst != nil {
+		state = inst.State()
+	}
+	if state.UpdatedAt.IsZero() && state.Phase == "" {
+		state = fallback
+	}
+	if strings.TrimSpace(state.DeviceID) == "" {
+		state.DeviceID = strings.TrimSpace(deviceID)
+	}
+	if state.Phase == "" {
+		state.Phase = runtimehost.PhaseFailed
+	}
+	if strings.TrimSpace(state.LastErrorClass) == "" {
+		state.LastErrorClass = "runtime"
+	}
+	if strings.TrimSpace(state.LastReason) == "" {
+		state.LastReason = "runtime_start_failed"
+	}
+	if err != nil && strings.TrimSpace(state.LastError) == "" {
+		state.LastError = err.Error()
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now()
+	}
+	return state
 }

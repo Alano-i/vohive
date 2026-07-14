@@ -256,14 +256,7 @@ func (w *WeComChannel) accessToken() (string, error) {
 }
 
 func (w *WeComChannel) buildPayload(ctx NotificationContext) (wecomNewsPayload, error) {
-	title := w.render(w.cfg.ArticleTitle, ctx)
-	if strings.TrimSpace(title) == "" {
-		title = w.titleForContext(ctx)
-	}
-	description := w.render(w.cfg.ArticleDescription, ctx)
-	if strings.TrimSpace(description) == "" {
-		description = ctx.Text
-	}
+	title, description := w.articleText(ctx)
 	url := strings.TrimSpace(w.render(w.cfg.ArticleURL, ctx))
 
 	payload := wecomNewsPayload{
@@ -289,11 +282,24 @@ func (w *WeComChannel) buildPayload(ctx NotificationContext) (wecomNewsPayload, 
 	return payload, nil
 }
 
+func (w *WeComChannel) articleText(ctx NotificationContext) (string, string) {
+	if strings.TrimSpace(ctx.Event) != "sms_received" {
+		return w.titleForContext(ctx), strings.TrimSpace(ctx.Text)
+	}
+
+	title := w.render(w.cfg.ArticleTitle, ctx)
+	if strings.TrimSpace(title) == "" {
+		title = w.titleForContext(ctx)
+	}
+	description := w.render(w.cfg.ArticleDescription, ctx)
+	if strings.TrimSpace(description) == "" {
+		description = ctx.Text
+	}
+	return title, description
+}
+
 func (w *WeComChannel) titleForContext(ctx NotificationContext) string {
 	label := ctx.DeviceLabel()
-	if label == "未知设备" {
-		label = "VoHive"
-	}
 	switch ctx.Event {
 	case "sms_received":
 		return "新短信 - " + label
@@ -302,6 +308,9 @@ func (w *WeComChannel) titleForContext(ctx NotificationContext) string {
 	case "ip_rotated":
 		return "公网 IP 已切换 - " + label
 	default:
+		if label == "未知设备" {
+			return "VoHive 通知"
+		}
 		return "VoHive 通知 - " + label
 	}
 }

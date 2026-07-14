@@ -12,12 +12,13 @@ export function applyOptimisticActiveState(
 ): EsimEUICCProfiles[] {
   const target = normalizeICCID(targetICCID)
   const targetGroup = aidHex.trim().toUpperCase()
+  const groupProfiles = (group: EsimEUICCProfiles) => Array.isArray(group.profiles) ? group.profiles : []
   const matchedGroup = groups.find((group) => {
     if (targetGroup && group.aid_hex.trim().toUpperCase() !== targetGroup) {
       return false
     }
-    return group.profiles.some((profile) => normalizeICCID(profile.iccid) === target)
-  }) ?? groups.find((group) => group.profiles.some((profile) => normalizeICCID(profile.iccid) === target))
+    return groupProfiles(group).some((profile) => normalizeICCID(profile.iccid) === target)
+  }) ?? groups.find((group) => groupProfiles(group).some((profile) => normalizeICCID(profile.iccid) === target))
 
   if (!matchedGroup) {
     return groups
@@ -25,7 +26,7 @@ export function applyOptimisticActiveState(
 
   return groups.map((group) => ({
     ...group,
-    profiles: group.profiles.map((profile) => {
+    profiles: groupProfiles(group).map((profile) => {
       const isTarget = normalizeICCID(profile.iccid) === target
       return {
         ...profile,

@@ -1,7 +1,7 @@
 import { api } from '../stores/auth'
 import { callService } from './http'
 import type { ServiceResult } from '../types/domain'
-import type { DeviceMgmtListItem } from '../types/api'
+import type { DeviceMgmtListItem, SMSProfileDevice } from '../types/api'
 import type { SMSContactDTO, SMSMessageDTO, SmsThreadVM } from '../types/view-model'
 
 export type SmsThreadQueryParams = {
@@ -26,6 +26,12 @@ export type SmsDeleteThreadPayload = {
   peer: string
 }
 
+export type SmsProfileDeviceVM = SMSProfileDevice & {
+  id: string
+  label: string
+  device: DeviceMgmtListItem
+}
+
 function parseTs(s: string) {
   const ms = new Date(s).getTime()
   return Number.isFinite(ms) ? ms : 0
@@ -35,6 +41,7 @@ function normalizeThread(contact: SMSContactDTO): SmsThreadVM {
   return {
     key: `${contact.imsi}|${contact.peer}`,
     imsi: contact.imsi,
+    iccid: contact.iccid || '',
     peer: contact.peer,
     deviceId: contact.device_id,
     lastTs: parseTs(contact.last_timestamp),
@@ -63,17 +70,35 @@ function reuseInflight<T>(key: string, task: () => Promise<T>): Promise<ServiceR
 export const smsService = {
   listDevices() {
     return reuseInflight('sms:listDevices', async () => {
-      const res = await api.get('/devices')
-      const list = (res.data?.devices || []) as DeviceMgmtListItem[]
-      // SMS 已是系统不变量（恒开），不再按 sms_enabled 过滤；仅展示运行中设备。
-      return list.filter(d => d.running)
+      const [deviceRes, profileRes] = await Promise.all([
+        api.get('/devices'),
+        api.get('/sms/profiles')
+      ])
+      const devices = ((deviceRes.data?.devices || []) as DeviceMgmtListItem[]).filter(d => d.running)
+      const deviceById = new Map(devices.map(device => [device.id, device]))
+      const profiles = (profileRes.data?.profiles || []) as SMSProfileDevice[]
+      return profiles.flatMap((profile): SmsProfileDeviceVM[] => {
+        const device = deviceById.get(profile.device_id)
+        if (!device || !profile.iccid) return []
+        const profileName = profile.profile_name || profile.service_provider_name || `Profile ${profile.iccid.slice(-6)}`
+        return [{
+          ...profile,
+          id: `profile:${profile.iccid}`,
+          label: `${profile.device_name || device.name || device.id} · ${profileName}`,
+          device
+        }]
+      })
     })
   },
-  listContacts(deviceId?: string) {
-    const key = `sms:listContacts:${deviceId && deviceId !== 'all' ? deviceId : 'all'}`
+  listContacts(profileId?: string) {
+    const key = `sms:listContacts:${profileId && profileId !== 'all' ? profileId : 'all'}`
     return reuseInflight(key, async () => {
       const params: Record<string, string> = { limit: '200' }
-      if (deviceId && deviceId !== 'all') params.device_id = deviceId
+      if (profileId?.startsWith('profile:')) {
+        params.iccid = profileId.slice('profile:'.length)
+      } else if (profileId && profileId !== 'all') {
+        params.device_id = profileId
+      }
       const res = await api.get('/sms/contacts', { params })
       const list = (res.data || []) as SMSContactDTO[]
       return list.map(normalizeThread).sort((a, b) => b.lastTs - a.lastTs)

@@ -138,6 +138,80 @@ func TestSaveSMSOrphanICCIDFallback(t *testing.T) {
 	}
 }
 
+func TestSaveSMSWithICCIDUsesWorkerIdentityBeforeSIMSync(t *testing.T) {
+	openTestDB(t)
+	if err := SaveSMSWithICCID("IMSI_LIVE", "ICC_LIVE", "+10086", "", "hello", 1, 0, time.Now()); err != nil {
+		t.Fatalf("SaveSMSWithICCID error=%v", err)
+	}
+	list, err := GetSMSByICCID("ICC_LIVE", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].IMSI != "IMSI_LIVE" {
+		t.Fatalf("worker ICCID should be used directly: %+v", list)
+	}
+}
+
+func TestUpsertSIMCardReconcilesSyntheticSMSICCID(t *testing.T) {
+	openTestDB(t)
+	if err := SaveSMS("IMSI_LATE", "+10086", "", "before identity sync", 1, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertSIMCardIdentity("ICC_LATE", "IMSI_LATE", "Test", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := GetSMSByICCID("ICC_LATE", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ICCID != "ICC_LATE" {
+		t.Fatalf("synthetic SMS ICCID was not reconciled: %+v", list)
+	}
+	contacts, err := GetSMSContactsByICCID("ICC_LATE", 10, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contacts) != 1 || contacts[0].ICCID != "ICC_LATE" {
+		t.Fatalf("synthetic contact ICCID was not reconciled: %+v", contacts)
+	}
+}
+
+func TestGetSMSContactsByDeviceIncludesHistoricalProfiles(t *testing.T) {
+	openTestDB(t)
+	imei := "IMEI_DEVICE"
+	if err := UpsertDevice(imei, "device-1", "EC20", "/dev/ttyUSB2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertSIMCardIdentity("ICC_PROFILE_A", "IMSI_A", "A", &imei); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertSIMCardIdentity("ICC_PROFILE_B", "IMSI_B", "B", &imei); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSMS("IMSI_A", "+100", "", "profile A", 1, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSMS("IMSI_B", "+200", "", "profile B", 1, 0, time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	contacts, err := GetSMSContactsByDeviceID("device-1", 10, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contacts) != 2 {
+		t.Fatalf("device should include both eSIM profiles: %+v", contacts)
+	}
+	assignments, err := GetSIMDeviceAssignments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assignments) != 2 {
+		t.Fatalf("profile assignments mismatch: %+v", assignments)
+	}
+}
+
 // 上行投递记录也要带 iccid，与 sms/sms_contacts 维度一致。
 func TestCreateSMSDeliveryPopulatesICCID(t *testing.T) {
 	openTestDB(t)

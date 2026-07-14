@@ -3,11 +3,15 @@ package backend
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
 	"github.com/iniwex5/vohive/internal/modem"
 	"github.com/iniwex5/vohive/pkg/smscodec"
 )
+
+var atSIMPowerOnSettleDelay = 2 * time.Second
 
 // ATBackend AT 后端适配器 — 纯包装层，委托给现有 modem.Manager
 // 不修改 modem.Manager 的任何一行代码
@@ -52,6 +56,98 @@ func (a *ATBackend) GetICCID(ctx context.Context) (string, error) {
 
 func (a *ATBackend) GetMSISDN(ctx context.Context) (string, error) {
 	return a.modem.QueryMSISDN()
+}
+
+// GetUIMReadiness exposes the AT-visible SIM identity to the shared post-switch
+// convergence flow. This lets AT devices detect a stale modem-side SIM cache
+// after an eUICC profile switch and trigger a controlled CFUN reload.
+func (a *ATBackend) GetUIMReadiness(ctx context.Context) (qmimanager.UIMReadiness, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out := qmimanager.UIMReadiness{
+		TransportReady: true,
+		ControlReady:   true,
+		ActiveSlot:     1,
+		SlotKnown:      true,
+		SlotSource:     "at_default_slot",
+	}
+	if err := ctx.Err(); err != nil {
+		out.ControlReady = false
+		out.Reason = qmimanager.UIMReadinessControlUnavailable
+		out.Err = err
+		return out, err
+	}
+
+	inserted, err := a.modem.QuerySIMInserted()
+	if err != nil {
+		out.ControlReady = false
+		out.Reason = qmimanager.UIMReadinessControlUnavailable
+		out.Err = err
+		return out, err
+	}
+	out.CardPresent = inserted
+	if !inserted {
+		out.Reason = qmimanager.UIMReadinessCardAbsent
+		return out, nil
+	}
+	out.UIMReady = true
+
+	iccid, iccidErr := a.modem.QueryICCID()
+	imsi, imsiErr := a.modem.QueryIMSI()
+	out.ICCID = strings.TrimSpace(iccid)
+	out.IMSI = strings.TrimSpace(imsi)
+	if out.ICCID == "" && out.IMSI == "" {
+		out.Reason = qmimanager.UIMReadinessIdentityEmpty
+		if iccidErr != nil {
+			out.Err = iccidErr
+			return out, iccidErr
+		}
+		if imsiErr != nil {
+			out.Err = imsiErr
+			return out, imsiErr
+		}
+		return out, nil
+	}
+	out.Reason = qmimanager.UIMReadinessReady
+	return out, nil
+}
+
+// UIMPowerOffSIM and UIMPowerOnSIM use CFUN cycling because the AT backend has
+// no per-slot UIM power API. Quectel modules reload the active eUICC profile
+// during this transition without requiring a full USB/module reboot.
+func (a *ATBackend) UIMPowerOffSIM(ctx context.Context, _ uint8) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return a.SetOperatingMode(ctx, ModeLowPower)
+}
+
+func (a *ATBackend) UIMPowerOnSIM(ctx context.Context, _ uint8) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.SetOperatingMode(ctx, ModeOnline); err != nil {
+		return err
+	}
+	delay := atSIMPowerOnSettleDelay
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // GetICCIDLive AT 模式下 ICCID 本身即实时读取。

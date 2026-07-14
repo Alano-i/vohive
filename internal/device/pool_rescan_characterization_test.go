@@ -46,3 +46,39 @@ func TestRescanCharacterization_MismatchedIMEIOnReusedPathDoesNotBind(t *testing
 		t.Fatalf("Expected no worker to be bound due to mismatched IMEI on reused path, got worker: %+v", w.Config)
 	}
 }
+
+func TestTargetedRescanDoesNotRemoveMissingNonTargetWorker(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "devices:\n- id: healthy-peer\n  device_backend: qmi\n  modem_imei: \"111111111111111\"\n  control_device: /dev/cdc-wdm1\n  interface: wwan1\n"
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := config.InitGlobalManager(configPath); err != nil {
+		t.Fatalf("InitGlobalManager() error = %v", err)
+	}
+
+	origDiscover := discoverQMIDevicesFn
+	discoverQMIDevicesFn = func() ([]QMIDevice, error) { return nil, nil }
+	t.Cleanup(func() { discoverQMIDevicesFn = origDiscover })
+
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	peer := &Worker{
+		ID:     "healthy-peer",
+		Config: config.DeviceConfig{ID: "healthy-peer", DeviceBackend: "qmi"},
+		stop:   make(chan struct{}),
+	}
+	p.workers[peer.ID] = peer
+
+	if err := p.rescanAndReconnect(rescanReconnectOptions{targetDeviceID: "recovering-device"}); err != nil {
+		t.Fatalf("targeted rescan failed: %v", err)
+	}
+	if got := p.GetWorker(peer.ID); got != peer {
+		t.Fatalf("non-target worker was removed or replaced: got=%p want=%p", got, peer)
+	}
+	select {
+	case <-peer.stop:
+		t.Fatal("non-target worker stop channel was closed")
+	default:
+	}
+}

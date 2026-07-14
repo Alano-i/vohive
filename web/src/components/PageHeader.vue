@@ -6,11 +6,14 @@ defineProps<{
 </script>
 
 <template>
-  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
+  <header class="page-header flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
     <div>
-      <h2 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-400">{{ title }}</h2>
-      <p v-if="subtitle" class="text-gray-500 dark:text-gray-400 mt-1">{{ subtitle }}</p>
+      <div class="page-eyebrow">Control module</div>
+      <h1 class="page-title">{{ title }}</h1>
+      <p v-if="subtitle" class="page-subtitle">{{ subtitle }}</p>
     </div>
-    <slot name="actions" />
-  </div>
+    <div class="page-header-actions flex items-center gap-2">
+      <slot name="actions" />
+    </div>
+  </header>
 </template>

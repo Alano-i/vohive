@@ -19,7 +19,6 @@ declare module 'vue' {
     DeviceCard: typeof import('./components/DeviceCard.vue')['default']
     DeviceConfigTab: typeof import('./components/DeviceConfigTab.vue')['default']
     DeviceDetailHeader: typeof import('./components/DeviceDetailHeader.vue')['default']
-    DeviceDetailLoading: typeof import('./components/DeviceDetailLoading.vue')['default']
     DeviceEsimTab: typeof import('./components/DeviceEsimTab.vue')['default']
     DeviceListPanel: typeof import('./components/DeviceListPanel.vue')['default']
     DeviceOverviewTab: typeof import('./components/DeviceOverviewTab.vue')['default']
@@ -47,7 +46,6 @@ declare module 'vue' {
     ElRadioButton: typeof import('element-plus/es')['ElRadioButton']
     ElRadioGroup: typeof import('element-plus/es')['ElRadioGroup']
     ElSelect: typeof import('element-plus/es')['ElSelect']
-    ElSkeleton: typeof import('element-plus/es')['ElSkeleton']
     ElSwitch: typeof import('element-plus/es')['ElSwitch']
     ElTable: typeof import('element-plus/es')['ElTable']
     ElTableColumn: typeof import('element-plus/es')['ElTableColumn']
@@ -61,7 +59,6 @@ declare module 'vue' {
     EsimCardPolicyInline: typeof import('./components/EsimCardPolicyInline.vue')['default']
     FieldRow: typeof import('./components/FieldRow.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
-    ListSkeleton: typeof import('./components/ListSkeleton.vue')['default']
     LoadingScreen: typeof import('./components/LoadingScreen.vue')['default']
     OperatorSelectionDialog: typeof import('./components/OperatorSelectionDialog.vue')['default']
     PageHeader: typeof import('./components/PageHeader.vue')['default']
@@ -71,8 +68,5 @@ declare module 'vue' {
     StatusLight: typeof import('./components/StatusLight.vue')['default']
     SwitchDark: typeof import('./components/SwitchDark.vue')['default']
     TrafficAnalysisPanel: typeof import('./components/TrafficAnalysisPanel.vue')['default']
-  }
-  export interface GlobalDirectives {
-    vLoading: typeof import('element-plus/es')['ElLoadingDirective']
   }
 }

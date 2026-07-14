@@ -61,6 +61,19 @@ func TestRunQMIStartCoreRetryAttemptIsBounded(t *testing.T) {
 	}
 }
 
+func TestQMIStartContextCancelsWhenWorkerStops(t *testing.T) {
+	workerStop := make(chan struct{})
+	ctx, cancel := qmiStartContext(context.Background(), workerStop)
+	defer cancel()
+	close(workerStop)
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("QMI start context was not cancelled with worker stop")
+	}
+}
+
 func TestStartAllReturnsBeforeQMIDiscoveryCompletes(t *testing.T) {
 	origDiscover := discoverQMIDevicesFn
 	releaseDiscover := make(chan struct{})

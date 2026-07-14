@@ -15,6 +15,7 @@ import (
 	"github.com/iniwex5/vohive/internal/config"
 	"github.com/iniwex5/vohive/internal/netprobe"
 	"github.com/iniwex5/vohive/pkg/logger"
+	"github.com/iniwex5/vohive/pkg/socketutil"
 
 	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
 	"github.com/iniwex5/quectel-qmi-go/pkg/netcfg"
@@ -808,7 +809,6 @@ func New(cfg config.DeviceConfig, modemDev *qmimanager.ModemDevice) *Manager {
 			device.ControlPath = cfg.QMIDevice
 		}
 	}
-
 	// 构建 quectel-qmi-go 配置
 	qmiCfg := buildQMIManagerConfig(cfg, device)
 
@@ -1093,7 +1093,7 @@ func (m *Manager) boundDialer(timeout time.Duration) *net.Dialer {
 	dialer.Control = func(network, address string, c syscall.RawConn) error {
 		var sockErr error
 		if err := c.Control(func(fd uintptr) {
-			sockErr = syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, m.cfg.Interface)
+			sockErr = socketutil.BindToDevice(fd, m.cfg.Interface)
 		}); err != nil {
 			return err
 		}

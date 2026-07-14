@@ -149,9 +149,9 @@ function clearHistory() {
       </div>
       <div v-for="(msg, i) in history" :key="i" class="flex w-full" :class="msg.type === 'req' ? 'justify-end' : 'justify-start'">
         <!-- 请求记录（右侧气泡） -->
-        <div v-if="msg.type === 'req'" class="max-w-[80%] bg-indigo-500 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-sm">
+        <div v-if="msg.type === 'req'" class="max-w-[80%] bg-primary-500 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-sm">
           <div class="text-sm break-words">{{ msg.content }}</div>
-          <div class="text-[10px] text-indigo-100 mt-1 text-right">{{ new Date(msg.ts).toLocaleTimeString() }}</div>
+          <div class="text-[10px] text-primary-100 mt-1 text-right">{{ new Date(msg.ts).toLocaleTimeString() }}</div>
         </div>
         
         <!-- 系统消息（居中） -->
@@ -173,9 +173,9 @@ function clearHistory() {
       <div v-if="sending" class="flex w-full justify-start mt-2">
         <div class="max-w-[80%] bg-white dark:bg-gray-800 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-gray-100 dark:border-white/5 flex items-center gap-2">
           <div class="flex space-x-1">
-            <div class="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-            <div class="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-            <div class="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce"></div>
+            <div class="w-1.5 h-1.5 bg-primary-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+            <div class="w-1.5 h-1.5 bg-primary-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+            <div class="w-1.5 h-1.5 bg-primary-400 rounded-full animate-bounce"></div>
           </div>
           <span class="text-xs text-gray-400 ml-1">等待网络响应...</span>
         </div>

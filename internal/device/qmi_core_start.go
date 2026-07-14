@@ -9,8 +9,8 @@ import (
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
-const qmiCoreStartupInlineBudget = 1500 * time.Millisecond
-const qmiCoreRetryAttemptBudget = 15 * time.Second
+const qmiCoreStartupInlineBudget = 60 * time.Second
+const qmiCoreRetryAttemptBudget = 60 * time.Second
 
 type qmiCoreStartResult struct {
 	err   error
@@ -61,7 +61,9 @@ func (p *Pool) startQMICoreWithStartupBudget(worker *Worker, reason string) erro
 		p.lifecycle.BeginRecovery(worker.ID, LifecyclePhaseQMIStarting, reason, qmiLifecycleRecoveryTTL)
 	}
 
-	result := runQMIStartCoreAttempt(p.ctx, worker.QMICore.StartCoreContext, qmiCoreStartupInlineBudget)
+	startCtx, cancel := qmiStartContext(p.ctx, worker.stop)
+	defer cancel()
+	result := runQMIStartCoreAttempt(startCtx, worker.QMICore.StartCoreContext, qmiCoreStartupInlineBudget)
 	if result.err == nil {
 		cleanupWorkerStartupSIMAuthLogicalChannels(worker)
 		if _, resetErr := p.resetExistingQMIDataConnectionBeforePreference(worker, reason); resetErr != nil {
@@ -97,7 +99,10 @@ func (p *Pool) startQMICoreRetryLoop(worker *Worker) {
 			case <-time.After(delay):
 			}
 
-			if err := runQMIStartCoreRetryAttempt(p.ctx, worker.QMICore.StartCoreContext, qmiCoreRetryAttemptBudget); err == nil {
+			attemptCtx, cancel := qmiStartContext(p.ctx, worker.stop)
+			err := runQMIStartCoreRetryAttempt(attemptCtx, worker.QMICore.StartCoreContext, qmiCoreRetryAttemptBudget)
+			cancel()
+			if err == nil {
 				logger.Info(fmt.Sprintf("[%s] QMI Core 已恢复启动", worker.ID))
 				cleanupWorkerStartupSIMAuthLogicalChannels(worker)
 				if _, resetErr := p.resetExistingQMIDataConnectionBeforePreference(worker, "qmi_core_recovered"); resetErr != nil {
@@ -123,4 +128,22 @@ func (p *Pool) startQMICoreRetryLoop(worker *Worker) {
 			}
 		}
 	}()
+}
+
+func qmiStartContext(parent context.Context, workerStop <-chan struct{}) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if workerStop == nil {
+		return ctx, cancel
+	}
+	go func() {
+		select {
+		case <-workerStop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }

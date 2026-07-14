@@ -90,6 +90,10 @@ type Server struct {
 	smsLimiter   *smsRateLimiter
 
 	shutdownCh chan struct{}
+
+	// networkRecovery is overridden by focused API tests. Production uses
+	// beginNetworkControlRecovery's modem reboot and rescan path.
+	networkRecovery func(context.Context, *device.Worker) error
 }
 
 type realtimeTrafficSubscriber interface {
@@ -266,6 +270,9 @@ func (s *Server) newRouter() *gin.Engine {
 		// ===== 短信 =====
 		api.POST("/sms/send", s.handleSendSMS)                    // 发送短信（自动选择 AT 或 VoWiFi）
 		api.GET("/sms/delivery/:message_id", s.handleSMSDelivery) // 查询发送投递状态
+		api.GET("/sms/profiles", s.handleGetSMSProfiles)          // 获取短信中心的 SIM/eSIM Profile 列表
+		api.GET("/sms/profiles/:iccid/phone", s.handleGetSMSProfilePhone)
+		api.PUT("/sms/profiles/:iccid/phone", s.handleSetSMSProfilePhone)
 		api.GET("/sms/contacts", s.handleGetSMSContacts)          // 获取短信联系人列表
 		api.GET("/sms/thread", s.handleGetSMSThread)              // 获取与某联系人的短信会话
 		api.DELETE("/sms/messages/:id", s.handleDeleteSMSMessage) // 删除单条历史短信
@@ -441,6 +448,7 @@ func (s *Server) handleListDevices(c *gin.Context) {
 		SignalDBM        int               `json:"signal_dbm"`
 		NetworkMode      string            `json:"network_mode"`
 		NetworkDuplex    string            `json:"network_duplex"`
+		SIMInserted      bool              `json:"sim_inserted"`
 		VoWiFiActive     bool              `json:"vowifi_active"`
 		VoWiFiRuntime    *voWiFiRuntimeDTO `json:"vowifi_runtime,omitempty"`
 		Traffic          map[string]string `json:"traffic,omitempty"`
@@ -466,6 +474,7 @@ func (s *Server) handleListDevices(c *gin.Context) {
 			SignalDBM:        status.SignalDBM,
 			NetworkMode:      status.NetworkMode,
 			NetworkDuplex:    status.NetworkDuplex,
+			SIMInserted:      status.SimInserted,
 			VoWiFiActive:     s.pool.IsVoWiFiActive(w.ID), // 逐个设备判断 VoWiFi 状态，支持多设备
 			VoWiFiRuntime:    s.getVoWiFiRuntimeDTO(w.ID),
 			NetworkConnected: w.NetworkConnected(),
@@ -847,22 +856,9 @@ func (s *Server) handleRotate(c *gin.Context) {
 
 func (s *Server) handleDeviceMgmtStartNetwork(c *gin.Context) {
 	deviceID := deviceIDParam(c)
-	worker := s.pool.GetWorker(deviceID)
-	if worker == nil {
-		c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "设备未找到"})
-		return
-	}
-	nc := worker.NetworkController()
-	if nc == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "当前设备不支持网络控制"})
-		return
-	}
-	if s.pool.IsVoWiFiActive(deviceID) {
-		c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "VoWiFi 运行中，无法启动数据网络"})
-		return
-	}
-	if err := worker.StartNetwork(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "启动数据网络失败: " + err.Error()})
+	worker, nc, statusCode, err := s.startDeviceNetwork(deviceID)
+	if err != nil {
+		c.JSON(statusCode, gin.H{"status": "error", "message": err.Error()})
 		return
 	}
 	go func() { _ = worker.RefreshRuntime(nil, "start_network") }()
@@ -876,6 +872,26 @@ func (s *Server) handleDeviceMgmtStartNetwork(c *gin.Context) {
 		"public_ip":         worker.GetCachedIP(),
 		"public_ipv6":       worker.GetCachedIPv6(),
 	})
+}
+
+func (s *Server) startDeviceNetwork(deviceID string) (*device.Worker, device.NetworkController, int, error) {
+	worker := s.pool.GetWorker(deviceID)
+	if worker == nil {
+		return nil, nil, http.StatusNotFound, errors.New("设备未找到")
+	}
+	nc := worker.NetworkController()
+	if nc == nil {
+		return worker, nil, http.StatusBadRequest, errors.New("当前设备不支持网络控制")
+	}
+	status := worker.ProjectDeviceStatus()
+	vowifiDesired := cardPolicyVoWiFiEnabled(strings.TrimSpace(status.ICCID), worker.Config.VoWiFiEnabled)
+	if vowifiDesired || s.pool.IsVoWiFiActive(deviceID) {
+		return worker, nc, http.StatusConflict, errors.New("VoWiFi 运行中，无法启动数据网络")
+	}
+	if err := worker.StartNetwork(); err != nil {
+		return worker, nc, http.StatusInternalServerError, fmt.Errorf("启动数据网络失败: %w", err)
+	}
+	return worker, nc, http.StatusOK, nil
 }
 
 func (s *Server) handleDeviceMgmtStopNetwork(c *gin.Context) {
@@ -1033,7 +1049,7 @@ func (s *Server) handleSendSMS(c *gin.Context) {
 	partsTotal := 1
 	deliveryState := "acked"
 
-	if s.pool.IsVoWiFiActive(deviceID) {
+	if s.workerVoWiFiDesired(deviceID, worker) || s.pool.IsVoWiFiActive(deviceID) {
 		// VoWiFi 模式下使用 IMS Core 发送；短信历史由宿主侧 runtime event / failure recorder 入库。
 		outcome, err := s.pool.SendVoWiFiSMSWithOptions(c.Request.Context(), deviceID, req.Phone, req.Message, sendOpts)
 		if outcome.PartsTotal > 0 {
@@ -1045,8 +1061,15 @@ func (s *Server) handleSendSMS(c *gin.Context) {
 		messageID = strings.TrimSpace(outcome.MessageID)
 		if err != nil {
 			_ = device.RecordVoWiFiSMSSendFailure(s.pool, deviceID, req.Phone, req.Message, time.Now())
-			c.JSON(http.StatusInternalServerError, gin.H{
+			statusCode := http.StatusInternalServerError
+			code := "vowifi_sms_send_failed"
+			if errors.Is(err, device.ErrVoWiFiSMSNotReady) {
+				statusCode = http.StatusConflict
+				code = "vowifi_sms_not_ready"
+			}
+			c.JSON(statusCode, gin.H{
 				"status":         "error",
+				"code":           code,
 				"message":        "VoWiFi 短信发送失败: " + err.Error(),
 				"device":         deviceID,
 				"phone":          req.Phone,
@@ -1086,6 +1109,22 @@ func (s *Server) handleSendSMS(c *gin.Context) {
 		"parts_total":    partsTotal,
 		"delivery_state": deliveryState,
 	})
+}
+
+func (s *Server) workerVoWiFiDesired(deviceID string, worker *device.Worker) bool {
+	if worker == nil {
+		return false
+	}
+	fallback := worker.Config.VoWiFiEnabled
+	iccid := ""
+	if s != nil && s.pool != nil {
+		iccid = strings.TrimSpace(s.pool.CurrentICCIDForDevice(deviceID))
+	}
+	if iccid == "" {
+		status := worker.ProjectDeviceStatus()
+		iccid = strings.TrimSpace(status.ICCID)
+	}
+	return cardPolicyVoWiFiEnabled(iccid, fallback)
 }
 
 func (s *Server) handleSMSDelivery(c *gin.Context) {
@@ -1251,6 +1290,170 @@ type SMSContactWithDevice struct {
 	LocalPhone string `json:"local_phone"` // 本机号码（收件人手机号），来自订阅手机号
 }
 
+type SMSProfileDevice struct {
+	DeviceID        string `json:"device_id"`
+	DeviceName      string `json:"device_name"`
+	ICCID           string `json:"iccid"`
+	IMSI            string `json:"imsi,omitempty"`
+	ProfileName     string `json:"profile_name"`
+	ServiceProvider string `json:"service_provider_name,omitempty"`
+	PhoneNumber     string `json:"phone_number,omitempty"`
+	Active          bool   `json:"active"`
+	Running         bool   `json:"running"`
+	Healthy         bool   `json:"healthy"`
+}
+
+func smsProfileName(name, serviceProvider, fallback string) string {
+	for _, candidate := range []string{name, serviceProvider, fallback} {
+		if value := strings.TrimSpace(candidate); value != "" {
+			return value
+		}
+	}
+	return "未知 Profile"
+}
+
+func (s *Server) handleGetSMSProfiles(c *gin.Context) {
+	managed := config.ListDevices()
+	cfgByID := make(map[string]config.DeviceConfig, len(managed))
+	for _, cfg := range managed {
+		cfgByID[cfg.ID] = cfg
+	}
+
+	simByICCID := make(map[string]db.SIMCard)
+	if cards, err := db.GetAllSIMCards(); err == nil {
+		for _, card := range cards {
+			simByICCID[strings.TrimSpace(card.ICCID)] = card
+		}
+	}
+
+	workers := s.pool.GetAllWorkers()
+	items := make([]SMSProfileDevice, 0, len(workers))
+	esimDeviceIDs := make([]string, 0, len(workers))
+	for _, worker := range workers {
+		status := worker.GetCachedDeviceStatus()
+		currentICCID := strings.TrimSpace(worker.CurrentICCID())
+		deviceName := worker.ID
+		if cfg, ok := cfgByID[worker.ID]; ok && strings.TrimSpace(cfg.Name) != "" {
+			deviceName = strings.TrimSpace(cfg.Name)
+		} else if strings.TrimSpace(worker.Config.Name) != "" {
+			deviceName = strings.TrimSpace(worker.Config.Name)
+		}
+
+		added := false
+		if worker.EsimMgr != nil {
+			if groups, err := worker.EsimMgr.GetProfiles(); err == nil {
+				if len(groups) > 0 {
+					esimDeviceIDs = append(esimDeviceIDs, worker.ID)
+				}
+				for _, group := range groups {
+					for _, profile := range group.Profiles {
+						iccid := strings.TrimSpace(profile.ICCID)
+						if iccid == "" {
+							continue
+						}
+						card := simByICCID[iccid]
+						imsi := strings.TrimSpace(card.IMSI)
+						if iccid == currentICCID && imsi == "" {
+							imsi = strings.TrimSpace(status.IMSI)
+						}
+						items = append(items, SMSProfileDevice{
+							DeviceID:        worker.ID,
+							DeviceName:      deviceName,
+							ICCID:           iccid,
+							IMSI:            imsi,
+							ProfileName:     smsProfileName(profile.Name, profile.ServiceProviderName, card.Operator),
+							ServiceProvider: strings.TrimSpace(profile.ServiceProviderName),
+							PhoneNumber: func() string {
+								phone, _ := db.GetPhoneNumberByIMSIOrICCID(imsi, iccid)
+								return strings.TrimSpace(phone)
+							}(),
+							Active:  iccid == currentICCID,
+							Running: true,
+							Healthy: worker.GetCachedHealthy(),
+						})
+						added = true
+					}
+				}
+			}
+		}
+		if added || currentICCID == "" {
+			continue
+		}
+		card := simByICCID[currentICCID]
+		imsi := strings.TrimSpace(card.IMSI)
+		if imsi == "" {
+			imsi = strings.TrimSpace(status.IMSI)
+		}
+		items = append(items, SMSProfileDevice{
+			DeviceID:    worker.ID,
+			DeviceName:  deviceName,
+			ICCID:       currentICCID,
+			IMSI:        imsi,
+			ProfileName: smsProfileName(status.NativeSPN, status.Operator, card.Operator),
+			PhoneNumber: func() string {
+				phone, _ := db.GetPhoneNumberByIMSIOrICCID(imsi, currentICCID)
+				return strings.TrimSpace(phone)
+			}(),
+			Active:  true,
+			Running: true,
+			Healthy: worker.GetCachedHealthy(),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"profiles": items, "esim_device_ids": esimDeviceIDs})
+}
+
+func validSMSProfileICCID(iccid string) bool {
+	if len(iccid) < 10 || len(iccid) > 32 {
+		return false
+	}
+	for _, ch := range iccid {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) handleGetSMSProfilePhone(c *gin.Context) {
+	iccid := strings.TrimSpace(c.Param("iccid"))
+	if !validSMSProfileICCID(iccid) {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "ICCID 无效"})
+		return
+	}
+	phone, err := db.GetPhoneNumberByIMSIOrICCID("", iccid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "读取本机号码失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"iccid": iccid, "phone_number": strings.TrimSpace(phone)})
+}
+
+func (s *Server) handleSetSMSProfilePhone(c *gin.Context) {
+	iccid := strings.TrimSpace(c.Param("iccid"))
+	if !validSMSProfileICCID(iccid) {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "ICCID 无效"})
+		return
+	}
+	var req struct {
+		PhoneNumber string `json:"phone_number"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "参数错误"})
+		return
+	}
+	if err := db.SetSIMCardManualPhoneNumber(iccid, req.PhoneNumber); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "保存本机号码失败: " + err.Error()})
+		return
+	}
+	phone, err := db.GetPhoneNumberByIMSIOrICCID("", iccid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "读取本机号码失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "iccid": iccid, "phone_number": strings.TrimSpace(phone)})
+}
+
 // resolveSMSICCID 将 device_id 或 imsi 查询参数解析为 ICCID，供 ICCID 维度的 SMS 查询使用。
 // 对于 ?imsi= 路径，通过 sim_cards 映射转换为 ICCID（无映射时使用 "imsi:" 前缀合成键）。
 func (s *Server) resolveSMSICCID(deviceID, imsi string) (string, int, string) {
@@ -1277,6 +1480,7 @@ func (s *Server) resolveSMSICCID(deviceID, imsi string) (string, int, string) {
 func (s *Server) handleGetSMSContacts(c *gin.Context) {
 	deviceID := c.Query("device_id")
 	imsi := c.Query("imsi")
+	requestedICCID := strings.TrimSpace(c.Query("iccid"))
 
 	limitStr := c.DefaultQuery("limit", "50")
 	var limit int
@@ -1290,8 +1494,16 @@ func (s *Server) handleGetSMSContacts(c *gin.Context) {
 	}
 	beforePeer := strings.TrimSpace(c.Query("before_peer"))
 
+	deviceID = strings.TrimSpace(deviceID)
 	var iccid string
-	if strings.TrimSpace(deviceID) != "" {
+	if requestedICCID != "" {
+		iccid = requestedICCID
+	} else if deviceID != "" && deviceID != "all" {
+		if s.pool.GetWorker(deviceID) == nil {
+			c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "设备未找到: " + deviceID})
+			return
+		}
+	} else if deviceID != "" {
 		resolved, status, msg := s.resolveSMSICCID(deviceID, imsi)
 		if status != 0 {
 			c.JSON(status, gin.H{"status": "error", "message": msg})
@@ -1302,7 +1514,11 @@ func (s *Server) handleGetSMSContacts(c *gin.Context) {
 
 	var contacts []db.SMSContact
 	var err error
-	if iccid != "" {
+	if requestedICCID != "" {
+		contacts, err = db.GetSMSContactsByICCID(iccid, limit, beforeTs, beforePeer)
+	} else if deviceID != "" && deviceID != "all" {
+		contacts, err = db.GetSMSContactsByDeviceID(deviceID, limit, beforeTs, beforePeer)
+	} else if iccid != "" {
 		contacts, err = db.GetSMSContactsByICCID(iccid, limit, beforeTs, beforePeer)
 	} else {
 		contacts, err = db.GetSMSContacts(limit, beforeTs, beforePeer)
@@ -1324,6 +1540,18 @@ func (s *Server) handleGetSMSContacts(c *gin.Context) {
 		}
 	}
 	workers := s.pool.GetAllWorkers()
+	if assignments, err := db.GetSIMDeviceAssignments(); err == nil {
+		for _, assignment := range assignments {
+			name := assignment.DeviceName
+			if deviceConfig, ok := cfgByID[assignment.DeviceID]; ok && strings.TrimSpace(deviceConfig.Name) != "" {
+				name = deviceConfig.Name
+			}
+			iccidDevice[assignment.ICCID] = struct {
+				id   string
+				name string
+			}{id: assignment.DeviceID, name: name}
+		}
+	}
 	for _, w := range workers {
 		wICCID := w.CurrentICCID()
 		if wICCID == "" {
