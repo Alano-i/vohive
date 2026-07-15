@@ -275,7 +275,6 @@ func (p *Pool) assignWorkerGeneration(worker *Worker) uint64 {
 	return generation
 }
 
-
 func (p *Pool) registerWorkerStarting(worker *Worker) error {
 	if p == nil || worker == nil || strings.TrimSpace(worker.ID) == "" {
 		return fmt.Errorf("worker_nil")
@@ -1046,10 +1045,12 @@ func (p *Pool) RemoveWorker(deviceID string) error {
 }
 
 // qmiWorkerBootstrapDeadline 是 AddWorkerFromConfig 单次执行的硬上限。
-// 内部多数探测都带有名义上的 context 超时，但一旦某一层（包括 vendored QMI 库）
-// 未正确响应取消，整条同步链路可能永久卡死，导致设备槽位既无法重试也无法删除。
-// 看门狗以此为界强制兜底释放 rebuilding 标记。
-var qmiWorkerBootstrapDeadline = 90 * time.Second
+// 多块 DJI 模组在主机启动后会并发做 USB/IMEI 归属解析，但 AT 串口探测需要
+// 串行避让；三块设备的正常冷启动可能超过 90 秒。过早释放 rebuilding 会让
+// 健康巡检启动第二个 Worker，并把仍在初始化的第一个 Worker/AT 口关闭，造成
+// ICCID 瞬时清空和 QMI Stop/Start 循环。四分钟硬上限仍能兜住真正未响应
+// context 取消的 vendored QMI 调用，同时不会误伤正常冷启动。
+var qmiWorkerBootstrapDeadline = 4 * time.Minute
 
 // beginRebuildAttemptLocked 标记设备进入新一轮启动/重建尝试，返回本次尝试的 token。
 // 调用前必须已持有 p.mu 写锁。
@@ -1277,12 +1278,6 @@ func (p *Pool) StartAll() error {
 	devices := append([]config.DeviceConfig(nil), p.cfg.Devices...)
 	for i := range devices {
 		devCfg := devices[i]
-		if !FreeDeviceLimitAllowsConfiguredDevice(devices, devCfg.ID) {
-			logger.Warn("当前版本设备数量限制，跳过启动配置设备",
-				"device", devCfg.ID,
-				"limit", DefaultFreeDeviceLimit)
-			continue
-		}
 		go p.startConfiguredDeviceBootstrap(devCfg, "start_all")
 	}
 	return nil
@@ -1390,11 +1385,10 @@ func qmiHealthyWorkerAttachmentUpdate(worker *Worker, live QMIDevice) (bool, con
 
 type rescanReconnectOptions struct {
 	targetDeviceID string
-	manualReboot   bool
 }
 
 func (opts rescanReconnectOptions) allowWorkerMutation(deviceID string) bool {
-	if !opts.manualReboot || strings.TrimSpace(opts.targetDeviceID) == "" {
+	if strings.TrimSpace(opts.targetDeviceID) == "" {
 		return true
 	}
 	return strings.TrimSpace(deviceID) == strings.TrimSpace(opts.targetDeviceID)
@@ -1478,13 +1472,6 @@ func (p *Pool) rescanAndReconnect(opts rescanReconnectOptions) error {
 
 	for _, pair := range resolved.Matched {
 		md := pair.Config
-		if !FreeDeviceLimitAllowsConfiguredDevice(managed, md.ID) {
-			logger.Warn("当前版本设备数量限制，跳过启动配置设备",
-				"device", md.ID,
-				"limit", DefaultFreeDeviceLimit)
-			continue
-		}
-
 		hw := pair.Hardware
 		useQMI := requiresQMICore(md)
 		worker := p.GetWorker(md.ID)
@@ -1622,6 +1609,14 @@ func (p *Pool) rescanAndReconnect(opts rescanReconnectOptions) error {
 			}
 			currentATPort := hw.ATPort
 			if currentATPort != "" && currentATPort != worker.Config.ATPort {
+				if !opts.allowWorkerMutation(md.ID) {
+					logger.Debug("跳过非目标设备 AT 端口变化重建：当前处于目标设备恢复重扫窗口",
+						"device", md.ID,
+						"target_device", opts.targetDeviceID,
+						"old_port", worker.Config.ATPort,
+						"new_port", currentATPort)
+					continue
+				}
 				logger.Info("检测到设备端口变化，重建 Worker",
 					"device", md.ID, "old_port", worker.Config.ATPort, "new_port", currentATPort)
 				p.teardownVoWiFiForReconnect(md.ID)
@@ -1655,7 +1650,10 @@ func (p *Pool) rescanAndReconnect(opts rescanReconnectOptions) error {
 	}
 
 	for _, md := range resolved.Offline {
-		if !FreeDeviceLimitAllowsConfiguredDevice(managed, md.ID) {
+		if !opts.allowWorkerMutation(md.ID) {
+			logger.Debug("跳过非目标离线设备清理：当前处于目标设备恢复重扫窗口",
+				"device", md.ID,
+				"target_device", opts.targetDeviceID)
 			continue
 		}
 		worker := p.GetWorker(md.ID)
@@ -1694,9 +1692,6 @@ func (p *Pool) RebuildWorker(deviceID string) error {
 	cfg, err := config.GetDeviceByID(deviceID)
 	if err != nil || cfg == nil {
 		return fmt.Errorf("读取设备 %s 配置失败: %w", deviceID, err)
-	}
-	if !FreeDeviceLimitAllowsConfiguredDevice(config.ListDevices(), cfg.ID) {
-		return fmt.Errorf("%s", FreeDeviceWorkerLimitMessage())
 	}
 
 	// 先停止 VoWiFi（如有），并让任何正在启动中的旧实例失效。
@@ -1823,6 +1818,31 @@ func (p *Pool) SetWorkerNetworkPolicy(deviceID string, networkEnabled bool, ipVe
 		// 开网络与 VoWiFi/飞行互斥（与后端落库互斥保持一致），否则概览仍显示旧模式面板。
 		w.Config.VoWiFiEnabled = false
 		w.Config.AirplaneEnabled = false
+	}
+	if strings.TrimSpace(ipVersion) != "" {
+		w.Config.IPVersion = strings.TrimSpace(ipVersion)
+	}
+	w.Config.APN = strings.TrimSpace(apn)
+	return w
+}
+
+// SetWorkerCardPolicyProjection atomically mirrors the persisted per-card policy
+// into a live worker without executing network or radio operations.
+func (p *Pool) SetWorkerCardPolicyProjection(deviceID string, networkEnabled, vowifiEnabled, airplaneEnabled bool, ipVersion, apn string) *Worker {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w := p.workers[deviceID]
+	if w == nil {
+		return nil
+	}
+	w.Config.NetworkEnabled = networkEnabled
+	w.Config.VoWiFiEnabled = vowifiEnabled
+	w.Config.AirplaneEnabled = airplaneEnabled
+	if vowifiEnabled {
+		w.Config.AirplaneEnabled = true
+		w.Config.NetworkEnabled = false
+	} else if airplaneEnabled {
+		w.Config.NetworkEnabled = false
 	}
 	if strings.TrimSpace(ipVersion) != "" {
 		w.Config.IPVersion = strings.TrimSpace(ipVersion)

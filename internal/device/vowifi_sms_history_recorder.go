@@ -85,7 +85,7 @@ func (r vowifiSMSHistoryRecorder) RecordReceived(e eventhost.SMSReceived) (vowif
 		return vowifiSMSRecordResult{Duplicate: true}, nil
 	}
 
-	err = db.SaveSMSWithLocalPhone(imsi, localPhone, strings.TrimSpace(e.Sender), localPhone, e.Content, 1, 0, ts)
+	err = db.SaveSMSWithICCIDAndLocalPhone(imsi, r.resolveICCID(e.DevID), localPhone, strings.TrimSpace(e.Sender), localPhone, e.Content, 1, 0, ts)
 	if err != nil {
 		return vowifiSMSRecordResult{}, err
 	}
@@ -98,7 +98,7 @@ func (r vowifiSMSHistoryRecorder) RecordSent(e eventhost.SMSSent) error {
 		return nil
 	}
 	localPhone := r.localPhone(imsi)
-	return db.SaveSMSWithLocalPhone(imsi, localPhone, localPhone, strings.TrimSpace(e.TargetURI), e.Content, 2, 2, r.eventTime(e.Time))
+	return db.SaveSMSWithICCIDAndLocalPhone(imsi, r.resolveICCID(e.DevID), localPhone, localPhone, strings.TrimSpace(e.TargetURI), e.Content, 2, 2, r.eventTime(e.Time))
 }
 
 func (r vowifiSMSHistoryRecorder) RecordSendFailure(devID, target, content string, at time.Time) error {
@@ -107,7 +107,7 @@ func (r vowifiSMSHistoryRecorder) RecordSendFailure(devID, target, content strin
 		return nil
 	}
 	localPhone := r.localPhone(imsi)
-	return db.SaveSMSWithLocalPhone(imsi, localPhone, localPhone, strings.TrimSpace(target), content, 2, 3, r.eventTime(at))
+	return db.SaveSMSWithICCIDAndLocalPhone(imsi, r.resolveICCID(devID), localPhone, localPhone, strings.TrimSpace(target), content, 2, 3, r.eventTime(at))
 }
 
 func (r vowifiSMSHistoryRecorder) RecordLocalNumberLearned(e eventhost.LocalNumberLearned) error {

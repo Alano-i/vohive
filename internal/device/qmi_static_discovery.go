@@ -167,6 +167,9 @@ func discoverQMIDeviceFromSysFS(usbPath string) (*QMIDevice, error) {
 		}
 	} else if vid == 0x05c6 {
 		atIntf = 2
+	} else if vid == 0x2ca3 && pid == 0x4006 {
+		// DJI/Baiwang QDC507 exposes its command AT port on USB interface 2.
+		atIntf = 2
 	}
 
 	// discovery 阶段保留该设备下的全部 AT 候选口，避免过早做主观裁剪。

@@ -24,6 +24,10 @@ const publicIPText = computed(() => {
   if (props.device?.network_connected === false) return '未联网'
   return '---'
 })
+
+const isDJIModule = computed(() => (
+  props.device.vendor_id === 0x2ca3 && props.device.product_id === 0x4006
+))
 </script>
 
 <template>
@@ -31,7 +35,10 @@ const publicIPText = computed(() => {
     <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
       <div class="min-w-0">
         <div class="flex items-center gap-3">
-          <div class="device-header-brand-icon">V</div>
+          <div class="device-header-brand-icon">
+            <img v-if="isDJIModule" class="device-header-dji-logo" src="/dji.svg" alt="" />
+            <span v-else>V</span>
+          </div>
           <div class="min-w-0">
             <div class="text-xl font-extrabold text-gray-900 dark:text-white truncate">{{ device.name || device.id }}</div>
             <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
@@ -74,12 +81,18 @@ const publicIPText = computed(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #5b5bd6, #4a4ac2);
+  background: linear-gradient(135deg, var(--vh-accent), var(--vh-accent-strong));
   color: #fff;
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 1.15rem;
   font-weight: 700;
   box-shadow: 0 10px 22px rgba(91, 91, 214, 0.2);
+}
+
+.device-header-dji-logo {
+  display: block;
+  width: auto;
+  height: 20px;
 }
 
 </style>

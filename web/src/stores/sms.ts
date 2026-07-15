@@ -1,12 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { AppError } from '../types/domain'
-import type { DeviceMgmtListItem } from '../types/api'
 import type { SMSMessageDTO, SmsThreadVM } from '../types/view-model'
-import { smsService, type SmsDeleteThreadPayload, type SmsSendPayload, type SmsThreadQueryParams } from '../services/sms'
+import { smsService, type SmsDeleteThreadPayload, type SmsProfileDeviceVM, type SmsSendPayload, type SmsThreadQueryParams } from '../services/sms'
 
 export const useSMSStore = defineStore('sms', () => {
-  const devices = ref<DeviceMgmtListItem[]>([])
+  const devices = ref<SmsProfileDeviceVM[]>([])
   const threads = ref<SmsThreadVM[]>([])
   const threadMessages = ref<SMSMessageDTO[]>([])
 

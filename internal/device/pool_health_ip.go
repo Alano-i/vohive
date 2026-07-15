@@ -82,6 +82,13 @@ func (p *Pool) healthCheckWorkerSnapshot() []*Worker {
 	return workers
 }
 
+func workerUsesQMIHealthPolicy(worker *Worker) bool {
+	if worker == nil {
+		return false
+	}
+	return worker.QMICore != nil || requiresQMICore(worker.Config)
+}
+
 func (p *Pool) runHealthCheckTick() bool {
 	workers := p.healthCheckWorkerSnapshot()
 	needRescan := false
@@ -109,7 +116,7 @@ func (p *Pool) runHealthCheckTick() bool {
 		if w.Backend != nil {
 			actBackend = w.Backend.Mode()
 		}
-		isQMI := actBackend == "qmi" || strings.ToLower(strings.TrimSpace(w.Config.DeviceBackend)) == "qmi"
+		isQMI := actBackend == "qmi" || workerUsesQMIHealthPolicy(w)
 
 		if isQMI {
 			if suppressed, reason := p.suppressQMIUnhealthyEviction(w); suppressed {

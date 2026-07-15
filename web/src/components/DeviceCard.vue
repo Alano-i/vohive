@@ -17,7 +17,11 @@ const emit = defineEmits<{
   'open-device': [id: string]
 }>()
 
+const simMissing = computed(() => props.device.sim_inserted === false)
+const deviceOnline = computed(() => props.device.healthy && !simMissing.value)
+
 const displayNetworkMode = computed(() => {
+  if (simMissing.value) return ''
   const mode = String(props.device?.network_mode || '').trim()
   const duplex = String(props.device?.network_duplex || '').trim()
   if (!mode) return ''
@@ -25,6 +29,7 @@ const displayNetworkMode = computed(() => {
 })
 
 const networkIcon = computed(() => {
+  if (simMissing.value) return CellularData124Regular
   // VoWiFi 模式显示 Wi-Fi 图标
   if (props.device?.vowifi_active) return Wifi124Regular
   const mode = displayNetworkMode.value
@@ -37,6 +42,7 @@ const networkIcon = computed(() => {
 })
 
 const networkColor = computed(() => {
+  if (simMissing.value) return 'text-gray-400'
   // VoWiFi 模式显示特殊颜色
   if (props.device?.vowifi_active) return 'text-emerald-500'
   const mode = displayNetworkMode.value
@@ -90,23 +96,23 @@ function getSignalBars(dbm: number | null | undefined) {
 <template>
   <button
     type="button"
-    class="group relative block w-full overflow-hidden ui-card ui-card-hover text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5b5bd6] focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-950"
+    class="group relative block w-full overflow-hidden ui-card ui-card-hover text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--vh-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-950"
     @click="emit('open-device', device.id)"
   >
-    <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-indigo-500/10 to-indigo-400/10 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-150" />
+    <div class="ui-card-glow absolute top-0 left-0 w-32 h-32 rounded-br-full -ml-8 -mt-8 transition-transform group-hover:scale-150" />
 
     <div class="p-6 relative z-10">
       <div class="flex justify-between items-start mb-6">
         <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-xl bg-gray-50 dark:bg-white/5 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-inner">
+          <div class="w-10 h-10 rounded-xl bg-gray-50 dark:bg-white/5 flex items-center justify-center text-primary-600 dark:text-primary-400 shadow-inner">
             <el-icon size="20"><Sim24Regular /></el-icon>
           </div>
           <div>
             <h3 class="font-bold text-base text-gray-800 dark:text-gray-100">{{ device.name || device.id }}</h3>
             <div class="flex items-center gap-1.5 mt-0.5">
-              <StatusLight :tone="device.healthy ? 'success' : 'danger'" size="md" :animated="device.healthy" />
-              <span class="text-xs font-medium" :class="device.healthy ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'">
-                {{ device.healthy ? '在线' : '离线' }}
+              <StatusLight :tone="deviceOnline ? 'success' : 'danger'" size="md" :animated="deviceOnline" />
+              <span class="text-xs font-medium" :class="deviceOnline ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'">
+                {{ deviceOnline ? '在线' : '离线' }}
               </span>
             </div>
           </div>
@@ -114,7 +120,7 @@ function getSignalBars(dbm: number | null | undefined) {
       </div>
 
       <div class="space-y-4">
-        <div class="flex items-center justify-between p-3 bg-gray-50/50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/5">
+        <div class="device-network-summary flex items-center justify-between p-3 bg-gray-50/50 dark:bg-white/5 rounded-xl border border-gray-100 dark:border-white/5">
           <div class="flex items-center gap-2 min-w-0">
             <div class="flex items-center gap-1.5 opacity-80">
               <el-icon :class="networkColor" size="18">
@@ -129,10 +135,10 @@ function getSignalBars(dbm: number | null | undefined) {
               </span>
             </div>
             <span class="flex-1 min-w-0 text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap truncate">
-              {{ device.vowifi_active ? 'Wi-Fi Calling' : (device.operator || '检测中...') }}
+              {{ simMissing ? '未插卡' : (device.vowifi_active ? 'Wi-Fi Calling' : (device.operator || '检测中...')) }}
             </span>
           </div>
-          <div v-if="!device.vowifi_active" class="flex items-center gap-1" title="信号强度">
+          <div v-if="!device.vowifi_active && !simMissing" class="flex items-center gap-1" title="信号强度">
             <div class="flex items-end gap-[2px] h-3">
               <div
                 v-for="i in 4"
@@ -149,10 +155,17 @@ function getSignalBars(dbm: number | null | undefined) {
         <div class="space-y-2">
           <div class="flex justify-between items-center text-sm">
             <span class="text-gray-400 flex items-center gap-1.5"><el-icon><Globe24Regular /></el-icon> 公网 IP</span>
-            <span class="font-bold text-indigo-600 dark:text-indigo-400" :class="device.public_ip ? 'font-mono' : ''">{{ publicIPText }}</span>
+            <span class="font-bold text-primary-600 dark:text-primary-400" :class="device.public_ip ? 'font-mono' : ''">{{ publicIPText }}</span>
           </div>
         </div>
       </div>
     </div>
   </button>
 </template>
+
+<style scoped>
+:global(html.dark .device-network-summary) {
+  border: 0;
+  background: rgba(0, 0, 0, 0.2);
+}
+</style>

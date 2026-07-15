@@ -151,6 +151,77 @@ func TestPatchCardPolicyForDeviceNoICCID(t *testing.T) {
 	}
 }
 
+func TestVoWiFiEnablePatchAcceptsDesiredStateWithoutWaitingForRuntime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	openTestDB(t)
+
+	p := device.NewPool(&config.Config{})
+	w := &device.Worker{ID: "wwan-vowifi-accepted"}
+	setNestedPrivateField(t, w, []string{"state", "Identity", "ICCID"}, "8986vowifiaccepted")
+	injectWorker(p, w)
+
+	requested := ""
+	s := &Server{
+		pool: p,
+		vowifiEnableRequest: func(deviceID string) error {
+			requested = deviceID
+			return nil
+		},
+	}
+	r := gin.New()
+	r.PATCH("/api/devices/:device_id/vowifi", s.handleDeviceVoWiFiPatch)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/devices/wwan-vowifi-accepted/vowifi", strings.NewReader(`{"enabled":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("code=%d want=%d body=%s", recorder.Code, http.StatusAccepted, recorder.Body.String())
+	}
+	if requested != w.ID {
+		t.Fatalf("requested device=%q want=%q", requested, w.ID)
+	}
+	policy, err := db.GetCardPolicy("8986vowifiaccepted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.VoWiFiEnabled || !w.Config.VoWiFiEnabled {
+		t.Fatalf("VoWiFi desired state was not preserved: policy=%+v worker=%+v", policy, w.Config)
+	}
+}
+
+func TestVoWiFiEnablePatchRejectsMissingICCIDBeforeQueueing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	openTestDB(t)
+
+	p := device.NewPool(&config.Config{})
+	w := &device.Worker{ID: "wwan-vowifi-no-iccid"}
+	injectWorker(p, w)
+	requested := false
+	s := &Server{
+		pool: p,
+		vowifiEnableRequest: func(string) error {
+			requested = true
+			return nil
+		},
+	}
+	r := gin.New()
+	r.PATCH("/api/devices/:device_id/vowifi", s.handleDeviceVoWiFiPatch)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/devices/wwan-vowifi-no-iccid/vowifi", strings.NewReader(`{"enabled":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("code=%d want=%d body=%s", recorder.Code, http.StatusConflict, recorder.Body.String())
+	}
+	if requested {
+		t.Fatal("runtime request must not be queued before an ICCID-backed policy is saved")
+	}
+}
+
 // TestPatchCardPolicyVoWiFiKeepsAirplaneIntent 验证开 VoWiFi 不再强制 airplane=true：
 // airplane 反映用户的纯飞行意图，独立于 vowifi。
 func TestPatchCardPolicyVoWiFiKeepsAirplaneIntent(t *testing.T) {

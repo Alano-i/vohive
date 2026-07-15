@@ -2,11 +2,90 @@ package device
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/iniwex5/vohive/internal/backend"
 	"github.com/iniwex5/vohive/internal/config"
+	"github.com/iniwex5/vohive/internal/modem"
 )
+
+func TestWorkerUsesQMIHealthPolicyForATHybridWorker(t *testing.T) {
+	worker := &Worker{Config: config.DeviceConfig{
+		DeviceBackend: "at",
+		ControlDevice: "/dev/cdc-wdm0",
+		Interface:     "wwan0",
+	}}
+	if !workerUsesQMIHealthPolicy(worker) {
+		t.Fatal("AT identity worker with a QMI attachment must use QMI health policy")
+	}
+
+	atOnly := &Worker{Config: config.DeviceConfig{DeviceBackend: "at", ATPort: "/dev/ttyUSB2"}}
+	if workerUsesQMIHealthPolicy(atOnly) {
+		t.Fatal("AT-only worker must not use QMI health policy")
+	}
+}
+
+func TestProbeDeviceHealthAcceptsHealthyQMIControlForATHybridWorker(t *testing.T) {
+	worker := &Worker{
+		ID: "hybrid",
+		Config: config.DeviceConfig{
+			DeviceBackend: "at",
+			ControlDevice: "/dev/cdc-wdm0",
+			Interface:     "wwan0",
+		},
+		Modem: &modem.Manager{},
+	}
+	worker.RecordWatchdogEvent(WatchdogEvent{
+		Layer:     HealthLayerQMI,
+		State:     HealthStateHealthy,
+		EventType: "qmi_control_ready",
+		Reason:    "test",
+	})
+
+	healthy, err := worker.ProbeDeviceHealth()
+	if err != nil {
+		t.Fatalf("ProbeDeviceHealth() error = %v", err)
+	}
+	if !healthy {
+		t.Fatal("healthy QMI control plane should keep hybrid worker healthy when auxiliary AT is down")
+	}
+}
+
+func TestProbeDeviceHealthKeepsIdleHybridWorkerWhenQMINodeExists(t *testing.T) {
+	control, err := os.CreateTemp(t.TempDir(), "cdc-wdm-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := &Worker{
+		ID: "idle-hybrid",
+		Config: config.DeviceConfig{
+			DeviceBackend:  "at",
+			ControlDevice:  control.Name(),
+			Interface:      "wwan0",
+			NetworkEnabled: false,
+		},
+		Modem: &modem.Manager{},
+	}
+	worker.RecordWatchdogEvent(WatchdogEvent{
+		Layer:     HealthLayerQMI,
+		State:     HealthStateSuspect,
+		EventType: "qmi_core_idle",
+		Reason:    "test",
+	})
+
+	healthy, err := worker.ProbeDeviceHealth()
+	if err != nil {
+		t.Fatalf("ProbeDeviceHealth() error = %v", err)
+	}
+	if !healthy {
+		t.Fatal("idle hybrid worker with present QMI node must not be rebuilt")
+	}
+}
 
 func TestHealthCheckSkipsDeviceUnderRebootRecovery(t *testing.T) {
 	// 当设备处于 modemRebootRecovering 中时，

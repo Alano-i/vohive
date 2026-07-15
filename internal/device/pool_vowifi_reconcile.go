@@ -217,6 +217,15 @@ func (p *Pool) markDesiredVoWiFiRecoverResult(deviceID string, err error) {
 		logger.Info("VoWiFi 目标态恢复成功", "event", "VOWIFI_DESIRED_RECOVER_SUCCESS", "device", deviceID)
 		return
 	}
+	// A user may disable VoWiFi while an ePDG attempt is in flight. Disable
+	// preempts that attempt, and its context-canceled result must not recreate a
+	// retry state after the desired policy has already been switched off.
+	w := p.GetWorker(deviceID)
+	if w == nil || !p.currentCardPolicyAllowsVoWiFi(w, w.CurrentICCID(), "recover_result") {
+		p.clearDesiredVoWiFiRecoverState(deviceID)
+		logger.Info("VoWiFi 目标态恢复结果已忽略：当前卡策略已关闭", "device", deviceID, "err", err)
+		return
+	}
 	if carrier.IsVoWiFiPolicyBlockedError(err) {
 		p.clearDesiredVoWiFiRecoverState(deviceID)
 		logger.Warn("VoWiFi 目标态恢复跳过：策略禁止", "event", "VOWIFI_DESIRED_RECOVER_SKIPPED_POLICY", "device", deviceID, "err", err)

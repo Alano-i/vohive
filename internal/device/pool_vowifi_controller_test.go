@@ -59,7 +59,7 @@ func TestVoWiFiControllerSerializesCommandsPerDevice(t *testing.T) {
 	}
 
 	go func() {
-		done <- c.Submit(context.Background(), vowifihost.LifecycleCommand{DeviceID: " dev-a ", Kind: vowifihost.LifecycleCommandDisable})
+		done <- c.Submit(context.Background(), vowifihost.LifecycleCommand{DeviceID: " dev-a ", Kind: vowifihost.LifecycleCommandRecover})
 	}()
 
 	select {
@@ -72,8 +72,8 @@ func TestVoWiFiControllerSerializesCommandsPerDevice(t *testing.T) {
 
 	select {
 	case got := <-started:
-		if got != "disable" {
-			t.Fatalf("second command = %q, want disable", got)
+		if got != "recover" {
+			t.Fatalf("second command = %q, want recover", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for second command to start")
@@ -92,7 +92,7 @@ func TestVoWiFiControllerSerializesCommandsPerDevice(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if want := []string{"enable", "disable"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"enable", "recover"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
 }
@@ -200,6 +200,32 @@ func TestHandleVoWiFiStartupErrorAPDUBusyStaysBelowWarn(t *testing.T) {
 	}
 	if countLogSuffix(entries, "debug", "VoWiFi 启动遇到 APDU busy，等待短退避恢复") != 1 {
 		t.Fatalf("APDU busy debug count = %d, want 1", countLogSuffix(entries, "debug", "VoWiFi 启动遇到 APDU busy，等待短退避恢复"))
+	}
+}
+
+func TestHandleVoWiFiStartupErrorKeepsFailureRuntimeState(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	deviceID := "dev-epdg-timeout"
+	p.voWiFiRuntimeStore().RecordStartupState(deviceID, runtimehost.State{
+		DeviceID:       deviceID,
+		Phase:          runtimehost.PhaseFailed,
+		LastErrorClass: "epdg",
+		LastError:      "epdg tunnel establishment timed out after 45s",
+		UpdatedAt:      time.Now(),
+	})
+
+	err := errors.New("epdg tunnel establishment timed out after 45s")
+	if got := p.handleVoWiFiStartupError("trace-epdg", deviceID, "", 0, time.Now(), &Worker{ID: deviceID}, runtimehost.State{LastErrorClass: "epdg"}, err); got == nil {
+		t.Fatal("handleVoWiFiStartupError() error = nil, want failure")
+	}
+
+	state, ok := p.GetVoWiFiRuntimeState(deviceID)
+	if !ok {
+		t.Fatal("expected failed runtime state to remain visible")
+	}
+	if state.Phase != runtimehost.PhaseFailed || state.LastError != err.Error() {
+		t.Fatalf("runtime state = %+v, want failed state with last error", state)
 	}
 }
 
@@ -569,4 +595,40 @@ func TestVoWiFiLifecycleControllerAssignsNonZeroGenerationToRestart(t *testing.T
 	if err := c.Submit(context.Background(), vowifihost.LifecycleCommand{DeviceID: "dev-restart", Kind: vowifihost.LifecycleCommandRestart}); err != nil {
 		t.Fatalf("submit() error = %v", err)
 	}
+}
+
+func TestRequestEnableVoWiFiQueuesRuntimeStartupWithoutBlocking(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	deviceID := "dev-vowifi-request"
+	p.workers[deviceID] = &Worker{ID: deviceID}
+
+	started := make(chan vowifihost.LifecycleCommand, 1)
+	release := make(chan struct{})
+	p.voWiFiHost().LifecycleControllerForTest().TestRun = func(_ context.Context, cmd vowifihost.LifecycleCommand) error {
+		started <- cmd
+		<-release
+		return nil
+	}
+
+	begin := time.Now()
+	if err := p.RequestEnableVoWiFi(deviceID); err != nil {
+		t.Fatalf("RequestEnableVoWiFi() error = %v", err)
+	}
+	if elapsed := time.Since(begin); elapsed > 100*time.Millisecond {
+		t.Fatalf("RequestEnableVoWiFi() blocked for %s", elapsed)
+	}
+
+	select {
+	case cmd := <-started:
+		if cmd.Kind != vowifihost.LifecycleCommandRecover {
+			t.Fatalf("kind = %q, want recover", cmd.Kind.String())
+		}
+		if cmd.DeviceID != deviceID {
+			t.Fatalf("device = %q, want %q", cmd.DeviceID, deviceID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("background VoWiFi startup was not queued")
+	}
+	close(release)
 }

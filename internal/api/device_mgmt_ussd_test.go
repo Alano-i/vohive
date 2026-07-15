@@ -397,7 +397,7 @@ func TestHandleDeviceMgmtRebootRejectsMismatchedQMIIdentity(t *testing.T) {
 
 func TestHandleDeviceMgmtReconnectVoWiFiReturnsRestartError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	path := writeDeviceMgmtLimitConfig(t, `
+	path := writeDeviceMgmtTestConfig(t, `
 server:
   port: ":7575"
 devices:

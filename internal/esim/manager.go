@@ -1268,17 +1268,16 @@ func formatBytes(b int64) string {
 
 func cloneProfiles(groups []EUICCProfiles) []EUICCProfiles {
 	if len(groups) == 0 {
-		return nil
+		return []EUICCProfiles{}
 	}
 	cloned := make([]EUICCProfiles, len(groups))
 	for i, group := range groups {
 		cloned[i] = EUICCProfiles{
-			EID:    group.EID,
-			AIDHex: group.AIDHex,
+			EID:      group.EID,
+			AIDHex:   group.AIDHex,
+			Profiles: make([]ProfileItem, len(group.Profiles)),
 		}
-		if len(group.Profiles) > 0 {
-			cloned[i].Profiles = append([]ProfileItem(nil), group.Profiles...)
-		}
+		copy(cloned[i].Profiles, group.Profiles)
 	}
 	return cloned
 }
@@ -1540,6 +1539,21 @@ func (m *Manager) triggerOverviewReload(reason string) {
 
 func (m *Manager) WarmOverviewAsync(reason string) {
 	m.triggerOverviewReload(reason)
+}
+
+// RefreshOverviewAsync rebuilds the complete overview after operations that may
+// leave a profiles-only cache behind. Unlike WarmOverviewAsync, it never reuses
+// an existing snapshot whose chip information is missing.
+func (m *Manager) RefreshOverviewAsync(reason string) {
+	if m == nil {
+		return
+	}
+	m.invalidateOverviewCache(reason)
+	go func() {
+		if err := m.RefreshOverview(); err != nil {
+			logger.Warn("eSIM 总览异步刷新失败", "device", m.deviceID, "reason", reason, "err", err)
+		}
+	}()
 }
 
 func buildProfileGroup(eidStr string, aid []byte, profiles []*sgp22.ProfileInfo) EUICCProfiles {

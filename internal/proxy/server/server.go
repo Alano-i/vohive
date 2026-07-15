@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iniwex5/vohive/pkg/logger"
+	"github.com/iniwex5/vohive/pkg/socketutil"
 	socks5 "github.com/things-go/go-socks5"
 )
 
@@ -122,7 +123,7 @@ func newBoundDialer(id, iface string) *net.Dialer {
 			}
 			var sockErr error
 			if err := c.Control(func(fd uintptr) {
-				sockErr = syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, iface)
+				sockErr = socketutil.BindToDevice(fd, iface)
 			}); err != nil {
 				return err
 			}

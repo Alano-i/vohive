@@ -231,7 +231,6 @@ func TestQMIHealthyWorkerAttachmentUpdateSkipsInvalidWorkers(t *testing.T) {
 	}
 }
 
-
 func TestStartAllIMEIMissAllowsConfiguredStaticQMIAttachment(t *testing.T) {
 	cfg := config.DeviceConfig{
 		ID:            "wwan0",
@@ -284,8 +283,6 @@ func TestStartAllIMEIMissAllowsStaticQMIWhenDiscoveryUnavailable(t *testing.T) {
 		t.Fatal("static QMI config should start when discovery is unavailable")
 	}
 }
-
-
 
 func TestQMIBootstrapDiscoveryCacheReusesFirstResult(t *testing.T) {
 	orig := discoverQMIDevicesFn
@@ -380,19 +377,16 @@ func TestShouldFastStartMissingQMIWorker(t *testing.T) {
 	}
 }
 
-
-
-func TestRescanReconnectManualRebootScopeAllowsOnlyTargetMutation(t *testing.T) {
+func TestRescanReconnectTargetScopeAllowsOnlyTargetMutation(t *testing.T) {
 	opts := rescanReconnectOptions{
 		targetDeviceID: "wwan1",
-		manualReboot:   true,
 	}
 
 	if !opts.allowWorkerMutation("wwan1") {
-		t.Fatal("manual reboot scoped rescan should allow target device mutation")
+		t.Fatal("target-scoped rescan should allow target device mutation")
 	}
 	if opts.allowWorkerMutation("wwan0") {
-		t.Fatal("manual reboot scoped rescan should not mutate non-target devices")
+		t.Fatal("target-scoped rescan should not mutate non-target devices")
 	}
 }
 

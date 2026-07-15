@@ -118,6 +118,7 @@ func (m *Manager) enableRuntime(ctx context.Context, req runtimeEnableRequest) (
 		BeforeStart:   m.BeforeStart(deviceID, modemIface, preparedStart.Proxy),
 	})
 	if err != nil {
+		startFinalized = true
 		state, ok := m.State(deviceID)
 		if !ok {
 			state = initialState

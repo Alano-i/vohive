@@ -44,7 +44,7 @@ func TestUpdateDeviceDoesNotClobberCardPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := writeDeviceMgmtLimitConfig(t, `
+	path := writeDeviceMgmtTestConfig(t, `
 server:
   port: ":7575"
 devices:

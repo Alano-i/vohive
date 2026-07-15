@@ -6,11 +6,10 @@ import { Loading } from '@element-plus/icons-vue'
 import { useSMSStore } from '../stores/sms'
 import { usePollingScheduler } from '../composables/usePollingScheduler'
 import { toAppError } from '../services/http'
-import type { SmsThreadQueryParams } from '../services/sms'
+import type { SmsProfileDeviceVM, SmsThreadQueryParams } from '../services/sms'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ErrorState from '../components/ErrorState.vue'
-import ListSkeleton from '../components/ListSkeleton.vue'
 import RefreshButton from '../components/RefreshButton.vue'
 import type { DeviceMgmtListItem, SMSMessage } from '../types/api'
 import { Delete24Regular, Mail24Regular, Send24Regular } from '@vicons/fluent'
@@ -20,6 +19,7 @@ import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 type SmsThread = {
   key: string
   imsi: string
+  iccid: string
   peer: string
   deviceId?: string
   lastTs: number
@@ -35,11 +35,12 @@ const route = useRoute()
 const router = useRouter()
 const smsStore = useSMSStore()
 
-const devices = ref<DeviceMgmtListItem[]>([])
+const devices = ref<SmsProfileDeviceVM[]>([])
 const devicesLastOkAt = ref<number | null>(null)
 const devicesError = ref<{ message: string; status?: number; method?: string; url?: string } | null>(null)
 
 const loading = ref(false)
+const refreshing = ref(false)
 const threads = ref<SmsThread[]>([])
 const messagesLastOkAt = ref<number | null>(null)
 const messagesError = ref<{ message: string; status?: number; method?: string; url?: string } | null>(null)
@@ -189,12 +190,31 @@ const sendForm = ref({
 const sendEstimate = computed(() => estimateSegments(String(sendForm.value.message || '')))
 
 const selectedSendDeviceId = ref('')
-const sendDeviceOptions = computed(() => devices.value.map(d => ({ label: `${d.name || d.id}`, value: d.id })))
+const activeProfiles = computed(() => devices.value.filter(profile => profile.active && profile.running))
+const sendDeviceOptions = computed(() => activeProfiles.value.map(profile => ({ label: profile.label, value: profile.id })))
+const selectedSendDevice = computed(() => devices.value.find(d => d.id === selectedSendDeviceId.value) || null)
+const selectedSendBlockReason = computed(() => profileSendBlockReason(selectedSendDevice.value))
+const currentThreadSendDevice = computed(() => {
+  const t = selectedThread.value
+  if (!t) return null
+  if (selectedDevice.value !== 'all') {
+    return devices.value.find(profile => profile.id === selectedDevice.value) || null
+  }
+  return devices.value.find(profile => profile.iccid === t.iccid || (!!t.imsi && profile.imsi === t.imsi)) || null
+})
+const currentThreadSendBlockReason = computed(() => profileSendBlockReason(currentThreadSendDevice.value))
+const selectedProfile = computed(() => devices.value.find(profile => profile.id === selectedDevice.value) || null)
 
 const deviceSidebarItems = computed(() => {
   return [
-    { id: 'all', label: '全部设备', healthy: true },
-    ...devices.value.map(d => ({ id: d.id, label: d.name || d.id, healthy: !!d.running && (d.control_online ?? d.healthy) === true }))
+    { id: 'all', label: '全部 Profile', healthy: true, active: true, subtitle: '汇总所有 Profile 短信' },
+    ...devices.value.map(profile => ({
+      id: profile.id,
+      label: profile.label,
+      healthy: profile.active && profile.running && profile.healthy,
+      active: profile.active,
+      subtitle: `${profile.active ? '已启用' : '未启用'}${profile.phone_number ? ` · ${profile.phone_number}` : ''}`
+    }))
   ]
 })
 
@@ -216,6 +236,39 @@ function buildSmsQuery(device: string, contact?: string) {
 function markThreadSeen(t: SmsThread | null) {
   if (!t) return
   setLastSeen(t.key, t.lastTs)
+}
+
+function vowifiSendBlockReason(device: DeviceMgmtListItem | null | undefined) {
+  if (!device?.vowifi_enabled) return ''
+  const rt = device.vowifi_runtime
+  if (rt?.sms_ready) return ''
+  if (!rt) return 'VoWiFi 正在启动，SMS 尚未就绪'
+  if (rt.phase === 'failed') return `VoWiFi 启动失败：${vowifiRuntimeErrorText(rt.last_error)}`
+  if (!rt.tunnel_ready) return 'VoWiFi 隧道尚未就绪，SMS 暂不可用'
+  if (!rt.ims_ready) return 'VoWiFi IMS 尚未注册，SMS 暂不可用'
+  return 'VoWiFi SMS 尚未就绪'
+}
+
+function profileSendBlockReason(profile: SmsProfileDeviceVM | null | undefined) {
+  if (!profile) return '未找到对应的 SIM/eSIM Profile'
+  if (!profile.active) return `“${profile.profile_name}”当前未启用，仅可查看历史短信`
+  if (!profile.running) return '对应设备未运行，暂时无法发送短信'
+  return vowifiSendBlockReason(profile.device)
+}
+
+function vowifiRuntimeErrorText(err?: string) {
+  const text = String(err || '').trim()
+  if (!text) return '请检查 ePDG、网络或代理配置'
+  if (text.includes('epdg tunnel establishment timed out')) return 'ePDG 隧道建立超时'
+  return text
+}
+
+function ensureDeviceCanSendSMS(profileId: string) {
+  const profile = devices.value.find(item => item.id === profileId)
+  const reason = profileSendBlockReason(profile)
+  if (!reason) return true
+  ElMessage.warning(reason)
+  return false
 }
 
 function isUnread(t: SmsThread) {
@@ -382,7 +435,7 @@ async function fetchDevices() {
   const result = await smsStore.fetchDevices()
   if (seq !== devicesFetchSeq) return false
   if (result.ok) {
-    devices.value = (result.data || []) as DeviceMgmtListItem[]
+    devices.value = (result.data || []) as SmsProfileDeviceVM[]
     devicesLastOkAt.value = Date.now()
     if (selectedDevice.value !== 'all' && !devices.value.some(d => d.id === selectedDevice.value)) {
       selectedDevice.value = 'all'
@@ -424,12 +477,11 @@ async function fetchThreadLatest(silent = false) {
   }
   const seq = ++threadFetchSeq
   if (!silent) threadLoading.value = true
-  const params: SmsThreadQueryParams = { peer: t.peer, limit: 80 }
-  if (selectedDevice.value && selectedDevice.value !== 'all') {
-    params.device_id = selectedDevice.value
-  } else {
-    params.device_id = 'all'
-    params.imsi = t.imsi
+  const params: SmsThreadQueryParams = {
+    peer: t.peer,
+    limit: 80,
+    device_id: 'all',
+    imsi: t.imsi
   }
   const result = await smsStore.fetchThread(params)
   if (seq !== threadFetchSeq) return false
@@ -501,7 +553,10 @@ async function handleSelectDevice(deviceId: string, options: { syncRoute?: boole
   const syncRoute = options.syncRoute !== false
   const silent = options.silent === true
 
+  if (nextDevice === selectedDevice.value) return
+
   selectedDevice.value = nextDevice
+  threads.value = []
   clearSelectedThread(false)
   if (syncRoute) {
     void router.replace({ query: buildSmsQuery(nextDevice) })
@@ -523,8 +578,14 @@ async function fetchMessagesAndThread(silent = false) {
 }
 
 async function refreshAll() {
-  await fetchDevices()
-  await fetchMessagesAndThread()
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await fetchDevices()
+    await fetchMessagesAndThread()
+  } finally {
+    refreshing.value = false
+  }
 }
 
 async function pollRefresh() {
@@ -540,6 +601,26 @@ usePollingScheduler(pollRefresh, 5000, {
   maxIntervalMs: 60000,
   backgroundIntervalMs: 15000
 })
+
+watch(
+  () => [route.query.device, route.query.contact] as const,
+  async ([rawDevice, rawContact]) => {
+    const routeDevice = typeof rawDevice === 'string' && rawDevice.trim() ? rawDevice.trim() : 'all'
+    const routeContact = typeof rawContact === 'string' ? rawContact.trim() : ''
+
+    if (routeDevice !== selectedDevice.value) {
+      selectedDevice.value = routeDevice
+      threads.value = []
+      clearSelectedThread(false)
+      const ok = await fetchMessages(false)
+      if (!ok || selectedDevice.value !== routeDevice) return
+    }
+
+    if (selectedThreadKey.value === routeContact) return
+    selectedThreadKey.value = routeContact
+    await ensureThreadSelection({ syncRoute: false, silent: false, scrollToBottom: false })
+  }
+)
 
 watch(
   () => isNarrowLayout.value,
@@ -584,7 +665,8 @@ onUnmounted(() => {
 function openSendModal() {
   sendForm.value.phone = ''
   sendForm.value.message = ''
-  selectedSendDeviceId.value = selectedDevice.value !== 'all' ? selectedDevice.value : (devices.value[0]?.id || '')
+  const selected = devices.value.find(profile => profile.id === selectedDevice.value && profile.active)
+  selectedSendDeviceId.value = selected?.id || activeProfiles.value[0]?.id || ''
   showSendModal.value = true
 }
 
@@ -593,10 +675,13 @@ async function handleSendModal() {
     ElMessage.warning('请填写完整信息')
     return
   }
+  if (!ensureDeviceCanSendSMS(selectedSendDeviceId.value)) return
+  const profile = devices.value.find(item => item.id === selectedSendDeviceId.value)
+  if (!profile) return
   sending.value = true
   try {
     const result = await smsStore.send({
-      device_id: selectedSendDeviceId.value,
+      device_id: profile.device_id,
       phone: sendForm.value.phone,
       message: sendForm.value.message
     })
@@ -620,20 +705,16 @@ async function sendToCurrentThread() {
   if (!t) return
   const text = String(composer.value || '').trim()
   if (!text) return
-  const resolvedDeviceId = selectedDevice.value !== 'all' ? selectedDevice.value : (t.deviceId || devices.value[0]?.id || '')
-  if (!resolvedDeviceId) {
+  const profile = currentThreadSendDevice.value
+  if (!profile) {
     ElMessage.warning('暂无可用设备')
     return
   }
+  if (!ensureDeviceCanSendSMS(profile.id)) return
   sending.value = true
   try {
-    if (selectedDevice.value === 'all') {
-      const result = await smsStore.send({ imsi: t.imsi, phone: t.peer, message: text })
-      if (!result.ok) throw new Error(result.error.message || '发送失败')
-    } else {
-      const result = await smsStore.send({ device_id: resolvedDeviceId, phone: t.peer, message: text })
-      if (!result.ok) throw new Error(result.error.message || '发送失败')
-    }
+    const result = await smsStore.send({ device_id: profile.device_id, phone: t.peer, message: text })
+    if (!result.ok) throw new Error(result.error.message || '发送失败')
     composer.value = ''
     scrollThreadToBottom()
     setTimeout(async () => {
@@ -698,9 +779,7 @@ async function confirmDeleteThread(thread: SmsThread) {
 
   deletingThreadKey.value = thread.key
   try {
-    const payload = selectedDevice.value !== 'all'
-      ? { device_id: selectedDevice.value, peer: thread.peer }
-      : { device_id: 'all', imsi: thread.imsi, peer: thread.peer }
+    const payload = { device_id: 'all', imsi: thread.imsi, peer: thread.peer }
     const result = await smsStore.deleteThread(payload)
     if (!result.ok) throw new Error(result.error.message || '删除失败')
     ElMessage.success('已删除对话')
@@ -722,7 +801,7 @@ async function confirmDeleteThread(thread: SmsThread) {
     <PageHeader title="短信中心" subtitle="按联系人聚合，点击进入会话明细">
       <template #actions>
         <div class="flex items-center gap-2">
-          <RefreshButton :loading="loading" @click="refreshAll" />
+          <RefreshButton :loading="refreshing" @click="refreshAll" />
           <el-button type="primary" @click="openSendModal" class="font-bold !border-0">
             <el-icon><Send24Regular /></el-icon>
             新建短信
@@ -758,10 +837,6 @@ async function confirmDeleteThread(thread: SmsThread) {
     />
 
     <div class="flex-1 ui-card overflow-hidden relative">
-      <div v-if="loading && threads.length === 0" class="absolute inset-0 z-20 flex items-center justify-center bg-white/50 dark:bg-black/20 backdrop-blur-sm">
-        <el-icon class="is-loading" size="28"><Loading /></el-icon>
-      </div>
-
       <div class="sms-main-layout">
         <div v-if="showDeviceSidebar" class="flex flex-col border-r border-gray-100 dark:border-white/10">
           <div class="p-4 border-b border-gray-100 dark:border-white/10">
@@ -774,15 +849,19 @@ async function confirmDeleteThread(thread: SmsThread) {
               type="button"
               class="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-left transition-all"
               :class="selectedDevice === d.id
-                ? 'border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-500/10'
+                ? 'border-primary-200 dark:border-primary-500/30 bg-primary-50/70 dark:bg-primary-500/10'
                 : 'border-transparent hover:bg-gray-50/60 dark:hover:bg-white/5'"
               @click="void handleSelectDevice(d.id)"
             >
               <div class="min-w-0">
                 <div class="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{{ d.label }}</div>
-                <div class="text-xs text-gray-400 truncate">{{ d.id === 'all' ? '汇总所有设备短信' : d.id }}</div>
+                <div class="text-xs text-gray-400 truncate">{{ d.subtitle }}</div>
               </div>
-              <span v-if="d.id !== 'all'" class="w-2 h-2 rounded-full" :class="d.healthy ? 'bg-green-500' : 'bg-red-500'" />
+              <span
+                v-if="d.id !== 'all'"
+                class="w-2 h-2 rounded-full"
+                :class="d.active ? (d.healthy ? 'bg-green-500' : 'bg-red-500') : 'bg-gray-300 dark:bg-gray-600'"
+              />
             </button>
           </div>
         </div>
@@ -797,10 +876,12 @@ async function confirmDeleteThread(thread: SmsThread) {
             </div>
           </div>
 
-          <ListSkeleton v-if="loading && filteredThreads.length === 0" :rows="10" />
+          <div v-if="loading && filteredThreads.length === 0" class="flex-1 flex items-center justify-center p-6" aria-busy="true">
+            <el-icon class="is-loading text-gray-400" size="24"><Loading /></el-icon>
+          </div>
 
           <div v-else-if="filteredThreads.length === 0" class="flex-1 flex items-center justify-center p-6">
-            <EmptyState title="暂无会话" subtitle="等待设备收到短信或点击“新建短信”">
+            <EmptyState bare title="暂无会话" subtitle="等待设备收到短信或点击“新建短信”">
               <template #icon>
                 <el-icon size="28"><Mail24Regular /></el-icon>
               </template>
@@ -830,7 +911,7 @@ async function confirmDeleteThread(thread: SmsThread) {
                       <div class="min-w-0">
                         <div class="flex items-center gap-2">
                           <div class="font-extrabold text-gray-900 dark:text-white truncate">{{ t.peer }}</div>
-                          <span v-if="isUnread(t)" class="w-2 h-2 rounded-full bg-indigo-500" />
+                          <span v-if="isUnread(t)" class="w-2 h-2 rounded-full bg-primary-500" />
                         </div>
                         <div class="text-xs text-gray-500 dark:text-gray-400 truncate mt-1">{{ t.lastMessage }}</div>
                       </div>
@@ -875,8 +956,8 @@ async function confirmDeleteThread(thread: SmsThread) {
                   selectedDevice === 'all'
                     ? (selectedThread?.localPhone || selectedThread?.lastDeviceName
                         ? `本机：${selectedThread?.localPhone || selectedThread?.lastDeviceName}`
-                        : '全部设备')
-                    : `设备：${selectedDevice}`
+                        : '全部 Profile')
+                    : `Profile：${selectedProfile?.label || selectedDevice}`
                 }}
               </div>
             </div>
@@ -887,7 +968,7 @@ async function confirmDeleteThread(thread: SmsThread) {
           </div>
 
           <div v-if="!selectedThread" class="flex-1 flex items-center justify-center p-6">
-            <EmptyState title="请选择一个会话" subtitle="从左侧联系人列表进入短信明细" />
+            <EmptyState bare title="请选择一个会话" subtitle="从左侧联系人列表进入短信明细" />
           </div>
 
           <div v-else ref="detailScrollbar" class="flex-1 min-h-0 overflow-y-auto sms-detail-scroll" @scroll="onDetailScroll">
@@ -948,7 +1029,7 @@ async function confirmDeleteThread(thread: SmsThread) {
                       class="px-5 py-4 rounded-2xl text-sm leading-[1.75] shadow-sm border"
                       :class="m.type === 1
                         ? 'bg-white/90 dark:bg-white/5 text-gray-700 dark:text-gray-200 border-gray-100 dark:border-white/10'
-                        : 'bg-indigo-50 dark:bg-indigo-500/10 text-gray-800 dark:text-gray-100 border-indigo-100 dark:border-indigo-500/20'"
+                        : 'bg-primary-50 dark:bg-primary-500/10 text-gray-800 dark:text-gray-100 border-primary-100 dark:border-primary-500/20'"
                     >
                       {{ m.content }}
                     </div>
@@ -963,6 +1044,14 @@ async function confirmDeleteThread(thread: SmsThread) {
             <div class="text-[11px] text-gray-400 text-left mb-2">
               {{ composerEstimate.encoding }} · 预计 {{ composerEstimate.parts }} 段 · {{ composerLen }} 字
             </div>
+            <el-alert
+              v-if="currentThreadSendBlockReason"
+              class="!mb-3"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="currentThreadSendBlockReason"
+            />
             <div class="flex items-end gap-3">
               <el-input
                 ref="composerInput"
@@ -973,7 +1062,7 @@ async function confirmDeleteThread(thread: SmsThread) {
                 placeholder="回复（Enter 发送）"
                 @keydown.enter.exact.prevent="sendToCurrentThread"
               />
-              <el-button type="primary" :loading="sending" @click="sendToCurrentThread" class="!border-0 self-end">
+              <el-button type="primary" :loading="sending" :disabled="!!currentThreadSendBlockReason" @click="sendToCurrentThread" class="!border-0 self-end">
                 <el-icon><Send24Regular /></el-icon>
                 发送
               </el-button>
@@ -1004,6 +1093,14 @@ async function confirmDeleteThread(thread: SmsThread) {
             <el-option v-for="opt in sendDeviceOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
         </el-form-item>
+        <el-alert
+          v-if="selectedSendBlockReason"
+          class="!mb-4"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="selectedSendBlockReason"
+        />
         <el-form-item label="目标号码">
           <el-input v-model="sendForm.phone" placeholder="+86138..." />
         </el-form-item>
@@ -1023,7 +1120,7 @@ async function confirmDeleteThread(thread: SmsThread) {
       <template #footer>
         <div class="flex justify-end gap-3">
           <el-button @click="showSendModal = false">取消</el-button>
-          <el-button type="primary" :loading="sending" @click="handleSendModal">
+          <el-button type="primary" :loading="sending" :disabled="!!selectedSendBlockReason" @click="handleSendModal">
             <el-icon><Send24Regular /></el-icon>
             发送
           </el-button>

@@ -2,6 +2,7 @@ package vowifihost
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -111,5 +112,49 @@ func TestManagerStartRuntimeStopsStaleStartedInstance(t *testing.T) {
 	}
 	if manager.Active(deviceID) {
 		t.Fatal("stale started instance should not become active")
+	}
+}
+
+func TestManagerStartRuntimeRecordsFailureState(t *testing.T) {
+	manager := NewManager()
+	deviceID := "dev-failed"
+	claim := manager.BeginStart(deviceID)
+	if !claim.Accepted {
+		t.Fatalf("BeginStart() = %+v, want accepted", claim)
+	}
+	manager.SetRuntimeStartForTest(func(ctx context.Context, req runtimehost.StartRequest) (*runtimehost.Instance, error) {
+		return nil, errors.New("epdg tunnel establishment timed out after 45s")
+	})
+
+	_, err := manager.StartRuntime(context.Background(), RuntimeStartRequest{
+		DeviceID: deviceID,
+		TraceID:  "trace-failed",
+		Epoch:    claim.Epoch,
+		Prepared: PreparedStart{
+			Profile:  identity.Profile{IMSI: "001010000000001"},
+			Prepared: identity.PreparedSession{Profile: identity.Profile{IMSI: "001010000000001"}},
+			StartupState: runtimehost.State{
+				DeviceID:    deviceID,
+				SIMReady:    true,
+				AccessReady: true,
+			},
+		},
+		Modem: runtimeStartTestModem{},
+	})
+	if err == nil {
+		t.Fatal("StartRuntime() error = nil, want failure")
+	}
+	if manager.RuntimeStore().Starting(deviceID) {
+		t.Fatal("runtime starting flag should be cleared after failure")
+	}
+	state, ok := manager.State(deviceID)
+	if !ok {
+		t.Fatal("expected failed runtime state to remain visible")
+	}
+	if state.Phase != runtimehost.PhaseFailed {
+		t.Fatalf("Phase = %q, want %q", state.Phase, runtimehost.PhaseFailed)
+	}
+	if state.LastError != "epdg tunnel establishment timed out after 45s" {
+		t.Fatalf("LastError = %q", state.LastError)
 	}
 }

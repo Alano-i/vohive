@@ -27,8 +27,8 @@ const metaText = computed(() => {
 </script>
 
 <template>
-  <div class="p-6 bg-red-50/70 dark:bg-red-500/10 rounded-2xl border border-red-100 dark:border-red-500/20">
-    <div class="flex items-start justify-between gap-4">
+  <div class="error-state p-6 bg-red-50/70 dark:bg-red-500/10 rounded-2xl border border-red-100 dark:border-red-500/20">
+    <div class="flex items-center justify-between gap-4">
       <div class="min-w-0">
         <div class="text-sm font-extrabold text-red-700 dark:text-red-300">{{ title || '加载失败' }}</div>
         <div class="mt-1 text-xs text-red-700/80 dark:text-red-200/80 break-words">{{ message }}</div>
@@ -37,7 +37,7 @@ const metaText = computed(() => {
         </div>
         <div v-if="details" class="mt-2 text-xs font-mono text-red-900/60 dark:text-red-100/60 whitespace-pre-wrap break-words">{{ details }}</div>
       </div>
-      <el-button v-if="retryText" type="primary" @click="emit('retry')" class="!border-0">
+      <el-button v-if="retryText" type="danger" @click="emit('retry')" class="error-state__action !border-0">
         {{ retryText }}
       </el-button>
     </div>

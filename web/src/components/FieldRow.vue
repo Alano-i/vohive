@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { copyToClipboard } from '../utils/clipboard'
+import { SENSITIVE_VALUE_PLACEHOLDER } from '../composables/useSensitiveVisibility'
 
 const props = defineProps<{
   label: string
@@ -12,6 +13,7 @@ const props = defineProps<{
 }>()
 
 const displayValue = computed(() => {
+  if (props.sensitive) return SENSITIVE_VALUE_PLACEHOLDER
   const raw = props.value
   const s = raw == null ? '' : String(raw)
   const trimmed = s.trim()
@@ -19,7 +21,7 @@ const displayValue = computed(() => {
 })
 
 const canCopy = computed(() => {
-  if (!props.copyable) return false
+  if (!props.copyable || props.sensitive) return false
   const v = displayValue.value
   return !!v && v !== '--' && v !== '---'
 })
@@ -44,7 +46,7 @@ async function copy() {
       :class="[
         monospace ? 'font-mono' : '',
         canCopy ? 'cursor-pointer hover:underline' : '',
-        sensitive ? 'blur-sm select-none transition-all' : ''
+        sensitive ? 'select-none' : ''
       ]"
       :title="titleValue"
       @click="copy"

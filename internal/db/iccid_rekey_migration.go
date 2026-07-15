@@ -90,10 +90,10 @@ func backfillICCIDColumn(tx *gorm.DB, table string) error {
 		if iccid == "" {
 			continue
 		}
-		// 仅回填尚未赋值的行，幂等且不覆盖已存在的 iccid。
+		// 回填空值，并在真实映射出现后纠正早期的 imsi:<IMSI> 临时键。
 		if err := tx.Exec(
-			"UPDATE "+table+" SET iccid = ? WHERE imsi = ? AND (iccid IS NULL OR iccid = '')",
-			iccid, strings.TrimSpace(r.IMSI),
+			"UPDATE "+table+" SET iccid = ? WHERE imsi = ? AND (iccid IS NULL OR iccid = '' OR iccid = ?)",
+			iccid, strings.TrimSpace(r.IMSI), "imsi:"+strings.TrimSpace(r.IMSI),
 		).Error; err != nil {
 			return err
 		}

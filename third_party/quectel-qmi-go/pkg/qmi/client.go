@@ -615,6 +615,20 @@ func (c *Client) readLoop() {
 			c.mu.Unlock()
 
 			if ok && !packet.IsIndication {
+				// QMI responses must echo the request message ID. After a host reboot
+				// an externally-powered modem may still have late CTL responses queued
+				// from the previous process. CTL transaction IDs are only one byte, so
+				// a stale response can otherwise collide with a newly reused ID and be
+				// delivered to the wrong request (for example SYNC 0x0027 satisfying
+				// GET_CLIENT_ID 0x0022). Ignore the stale frame and keep waiting for the
+				// response that matches both transaction ID and message ID.
+				if entry.msgID != packet.MessageID {
+					c.unmatchedResponses.Add(1)
+					c.logf(ClientLogLevelDebug,
+						"QMI: ignoring mismatched response for active transaction key 0x%08x (got MsgID 0x%04x, want 0x%04x, Service 0x%02x, TxID %d)",
+						key, packet.MessageID, entry.msgID, packet.ServiceType, packet.TransactionID)
+					continue
+				}
 				select {
 				case entry.ch <- packet:
 				default:

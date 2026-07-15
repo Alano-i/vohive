@@ -111,7 +111,7 @@ func (c *LifecycleController) Submit(ctx context.Context, cmd LifecycleCommand) 
 	}
 
 	lifecycle := c.device(cmd.DeviceID)
-	if cmd.Kind == LifecycleCommandSwitchBegin || cmd.Kind == LifecycleCommandRestart {
+	if cmd.Kind == LifecycleCommandDisable || cmd.Kind == LifecycleCommandSwitchBegin || cmd.Kind == LifecycleCommandRestart {
 		return c.submitPreempting(ctx, lifecycle, cmd)
 	}
 

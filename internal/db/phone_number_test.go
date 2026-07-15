@@ -87,6 +87,55 @@ func TestUpdateSIMCardPhoneNumberByIMSICreatesSubscriptionOnly(t *testing.T) {
 	}
 }
 
+func TestManualPhoneOverridesLearnedValuesAndCanBeCleared(t *testing.T) {
+	initPhoneNumberTestDB(t)
+	iccid := "8986000000000000789"
+	imsi := "001010000000789"
+	if err := UpsertSIMCard(iccid, imsi, "", "Test", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateSIMCardVoWiFiPhoneNumberByIMSI(imsi, "+12025550100"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSIMCardManualPhoneNumber(iccid, "+12025550999"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateSIMCardModemPhoneNumberByIMSI(imsi, "+12025550200"); err != nil {
+		t.Fatal(err)
+	}
+
+	sub := loadSIMSubscriptionByIMSI(t, imsi)
+	if sub.PhoneNumber != "+12025550999" || sub.ManualPhoneNumber != "+12025550999" {
+		t.Fatalf("manual override not preserved: %+v", sub)
+	}
+	if err := SetSIMCardManualPhoneNumber(iccid, ""); err != nil {
+		t.Fatal(err)
+	}
+	sub = loadSIMSubscriptionByIMSI(t, imsi)
+	if sub.ManualPhoneNumber != "" || sub.PhoneNumber != "+12025550100" {
+		t.Fatalf("clear should fall back to VoWiFi value: %+v", sub)
+	}
+}
+
+func TestManualPhoneStagesByICCIDUntilIMSIArrives(t *testing.T) {
+	initPhoneNumberTestDB(t)
+	iccid := "8986000000000000790"
+	imsi := "001010000000790"
+	if err := SetSIMCardManualPhoneNumber(iccid, "+447700900790"); err != nil {
+		t.Fatal(err)
+	}
+	if phone, err := GetPhoneNumberByIMSIOrICCID("", iccid); err != nil || phone != "+447700900790" {
+		t.Fatalf("pending manual phone=%q err=%v", phone, err)
+	}
+	if err := UpsertSIMCard(iccid, imsi, "", "Test", nil); err != nil {
+		t.Fatal(err)
+	}
+	sub := loadSIMSubscriptionByIMSI(t, imsi)
+	if sub.PhoneNumber != "+447700900790" || sub.ManualPhoneNumber != "+447700900790" {
+		t.Fatalf("pending manual phone was not migrated: %+v", sub)
+	}
+}
+
 func TestSIMSubscriptionPhoneSurvivesReInitWithRealSIMCardRow(t *testing.T) {
 	old := DB
 	dbPath := filepath.Join(t.TempDir(), "sim_subscription_reinit.db")

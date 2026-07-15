@@ -173,6 +173,18 @@ ensure_restart_always() {
 		' "$service" > "$tmp"
 		mv "$tmp" "$service"
 	fi
+	if ! grep -q '^Environment=VOHIVE_VOWIFI_ENABLE_SWU=' "$service"; then
+		tmp="${service}.tmp"
+		awk '
+			{ print }
+			$0 == "Environment=HOME=/var/lib/vohive" {
+				print "Environment=VOHIVE_VOWIFI_ENABLE_SWU=1"
+			}
+		' "$service" > "$tmp"
+		mv "$tmp" "$service"
+	else
+		sed -i 's/^Environment=VOHIVE_VOWIFI_ENABLE_SWU=.*/Environment=VOHIVE_VOWIFI_ENABLE_SWU=1/' "$service"
+	fi
 	systemctl daemon-reload
 	systemctl restart "$APP_NAME"
 }

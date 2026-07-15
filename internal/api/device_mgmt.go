@@ -362,6 +362,8 @@ type deviceMgmtOverviewLiteItem struct {
 	ESIMTransport          string             `json:"esim_transport,omitempty"`
 	ATPort                 string             `json:"at_port,omitempty"`
 	USBPath                string             `json:"usb_path,omitempty"`
+	VendorID               uint16             `json:"vendor_id,omitempty"`
+	ProductID              uint16             `json:"product_id,omitempty"`
 	AudioDevice            string             `json:"audio_device,omitempty"`
 	LocalPhone             string             `json:"local_phone,omitempty"`
 	E911SetupAvailable     bool               `json:"e911_setup_available,omitempty"`
@@ -394,6 +396,7 @@ type deviceMgmtListModem struct {
 	SignalSINR    int    `json:"signal_sinr,omitempty"`
 	IMEI          string `json:"imei,omitempty"`
 	ICCID         string `json:"iccid,omitempty"`
+	SIMInserted   bool   `json:"sim_inserted"`
 	RegStatus     int    `json:"reg_status"`
 	PSAttached    bool   `json:"ps_attached"`
 }
@@ -577,6 +580,7 @@ func (s *Server) buildOverviewLiteDetailItemFromWorker(w *device.Worker, cfg con
 
 func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg config.DeviceConfig, status modem.DeviceStatus, radioLiveOK *bool, modemStatus modem.DeviceStatus) deviceMgmtOverviewLiteItem {
 	controlOnline := w.GetCachedHealthy()
+	vendorID, productID := device.USBHardwareIDsForDevice(cfg.USBPath, cfg.Interface, cfg.ControlDevice, w.ResolvedATPort())
 	item := deviceMgmtOverviewLiteItem{
 		ID:                     w.ID,
 		Name:                   cfg.Name,
@@ -590,6 +594,8 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 		ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
 		ATPort:                 w.ResolvedATPort(),
 		USBPath:                cfg.USBPath,
+		VendorID:               vendorID,
+		ProductID:              productID,
 		AudioDevice:            cfg.AudioDevice,
 		LocalPhone:             overviewLocalPhone(effectiveOverviewIMSI(w, status), strings.TrimSpace(status.ICCID)),
 		E911SetupAvailable:     e911.SetupAvailable(modemStatus),
@@ -750,6 +756,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 				SignalSINR:    status.SignalSINR,
 				IMEI:          status.IMEI,
 				ICCID:         status.ICCID,
+				SIMInserted:   status.SimInserted,
 				RegStatus:     status.RegStatus,
 				PSAttached:    status.PSAttached,
 			},
@@ -785,7 +792,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 		items = append(items, item)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"devices": items, "device_limit": device.DefaultFreeDeviceLimit})
+	c.JSON(http.StatusOK, gin.H{"devices": items})
 }
 
 // handleDeviceMgmtRefreshInfo 主动触发设备底层重新采集各种信息（SIM、信号等）
@@ -1475,13 +1482,6 @@ func validateDeviceBackendConfig(cfg config.DeviceConfig) error {
 	return nil
 }
 
-func validateFreeDeviceConfigLimit(devices []config.DeviceConfig) error {
-	if device.FreeDeviceLimitReached(len(devices)) {
-		return fmt.Errorf("%s", device.FreeDeviceAddLimitMessage())
-	}
-	return nil
-}
-
 func (s *Server) handleDeviceMgmtAddDevice(c *gin.Context) {
 	var req addDeviceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1509,10 +1509,6 @@ func (s *Server) handleDeviceMgmtAddDevice(c *gin.Context) {
 			"status":  "error",
 			"message": fmt.Sprintf("设备资源冲突：%s=%s 已被设备 %s 使用", conflict.Field, conflict.Value, conflict.OtherID),
 		})
-		return
-	}
-	if err := validateFreeDeviceConfigLimit(config.ListDevices()); err != nil {
-		c.JSON(http.StatusConflict, gin.H{"status": "error", "message": err.Error()})
 		return
 	}
 	// MBIM 设备使用 MBIM DeviceCaps 探测 IMEI，非 MBIM 设备使用 QMI 探测
@@ -2428,6 +2424,37 @@ func shouldUseATFirstReboot(backendMode string) bool {
 	return backendMode != backend.BackendQMI
 }
 
+func sendWorkerReboot(ctx context.Context, worker *device.Worker, forceATFirst bool) error {
+	if worker == nil {
+		return errors.New("设备未找到")
+	}
+	rebootSent := false
+	useATFirst := forceATFirst || worker.Backend == nil || shouldUseATFirstReboot(worker.Backend.Mode())
+
+	if useATFirst && worker.Modem != nil && worker.Modem.HasATPort() && worker.Modem.CanExecuteAT() {
+		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", 20*time.Second)
+		if err == nil {
+			rebootSent = true
+		} else {
+			message := strings.ToLower(err.Error())
+			if strings.Contains(message, "timeout") || strings.Contains(message, "eof") || strings.Contains(message, "closed") || strings.Contains(message, "no such file") {
+				rebootSent = true
+			}
+		}
+	}
+
+	if !rebootSent && worker.Backend != nil {
+		if err := worker.Backend.Reboot(ctx); err != nil {
+			return fmt.Errorf("重启指令失败: %w", err)
+		}
+		rebootSent = true
+	}
+	if !rebootSent {
+		return errors.New("无法发送重启指令，无可用通道")
+	}
+	return nil
+}
+
 // handleDeviceMgmtReboot 执行模组重启 (QMI 模式走 QMI ModeReset，AT 模式走 AT+CFUN=1,1)
 func (s *Server) handleDeviceMgmtReboot(c *gin.Context) {
 	id := deviceIDParam(c)
@@ -2443,35 +2470,8 @@ func (s *Server) handleDeviceMgmtReboot(c *gin.Context) {
 		return
 	}
 
-	rebootSent := false
-
-	useATFirst := worker.Backend == nil || shouldUseATFirstReboot(worker.Backend.Mode())
-
-	// AT 模式设备优先尝试使用 AT 端口软重启；QMI 模式设备直接走 QMI ModeReset（见下方 fallback）
-	if useATFirst && worker.Modem != nil && worker.Modem.HasATPort() && worker.Modem.CanExecuteAT() {
-		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", 20*time.Second)
-		if err == nil {
-			rebootSent = true
-		} else {
-			// 如果发送后立刻断开，可能会报错，视同成功发送
-			msg := strings.ToLower(err.Error())
-			if strings.Contains(msg, "timeout") || strings.Contains(msg, "eof") || strings.Contains(msg, "closed") || strings.Contains(msg, "no such file") {
-				rebootSent = true
-			}
-		}
-	}
-
-	// QMI 模式设备的主路径；AT 模式设备在 AT 端口不可用/发送失败时的降级路径
-	if !rebootSent && worker.Backend != nil {
-		if err := worker.Backend.Reboot(c.Request.Context()); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "重启指令失败: " + err.Error()})
-			return
-		}
-		rebootSent = true
-	}
-
-	if !rebootSent {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "无法发送重启指令，无可用通道"})
+	if err := sendWorkerReboot(c.Request.Context(), worker, false); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
 		return
 	}
 

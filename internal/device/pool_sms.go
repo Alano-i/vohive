@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -309,6 +310,11 @@ func (w *Worker) getSMSCWithContext(ctx context.Context) (string, error) {
 	if w == nil {
 		return "", fmt.Errorf("worker 为空")
 	}
+	if w.QMICore != nil {
+		if v, err := w.QMICore.GetSMSC(ctx); err == nil {
+			return strings.TrimSpace(v), nil
+		}
+	}
 	if w.Backend != nil {
 		if provider, ok := w.Backend.(backend.SMSCProvider); ok {
 			v, err := provider.GetSMSC(ctx)
@@ -413,7 +419,28 @@ func (w *Worker) ProbeDeviceHealth() (bool, error) {
 		return true, nil
 	}
 	if w.Modem != nil {
-		return w.Modem.IsHealthy(), nil
+		if w.Modem.IsHealthy() {
+			return true, nil
+		}
+		// DJI/Baiwang devices use AT for identity/status while their data and
+		// control plane is QMI. Do not tear down a live QMI data session merely
+		// because the auxiliary AT manager is briefly unhealthy during a rescan
+		// or modem readiness transition.
+		if workerUsesQMIHealthPolicy(w) && (w.NetworkConnected() || qmiWorkerControlReady(w)) {
+			return true, nil
+		}
+		// With data explicitly disabled, a present QMI control node is enough
+		// to keep the device resident. QMI core readiness is not a reason to
+		// rebuild an idle AT+QMI worker; it will converge or be retried when the
+		// user enables data.
+		if workerUsesQMIHealthPolicy(w) && !w.Config.NetworkEnabled {
+			control := strings.TrimSpace(w.Config.ControlDevice)
+			if control != "" {
+				if _, err := os.Stat(control); err == nil {
+					return true, nil
+				}
+			}
+		}
 	}
 	return false, nil
 }
@@ -438,7 +465,7 @@ func (w *Worker) processSMS(sender, content string, timestamp time.Time) {
 		}
 	}
 	if imsi != "" {
-		if err := db.SaveSMS(imsi, sender, "", content, 1, 0, timestamp); err != nil {
+		if err := db.SaveSMSWithICCID(imsi, w.CurrentICCID(), sender, "", content, 1, 0, timestamp); err != nil {
 			logger.Warn(fmt.Sprintf("[%s] 保存短信到数据库失败", w.ID), "err", err)
 		}
 	}

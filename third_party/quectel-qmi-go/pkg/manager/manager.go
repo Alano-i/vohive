@@ -187,10 +187,10 @@ type Manager struct {
 	events  *EventEmitter // External event callbacks / 外部事件回调
 
 	// Reconnection / 重连相关
-	retryCount   int
-	retryDelays  []time.Duration
-	reinitDelays []time.Duration
-	isRotating   bool // Flag to suppress status checks during IP rotation / 标志位: IP轮换期间抑制状态检查
+	retryCount         int
+	retryDelays        []time.Duration
+	reinitDelays       []time.Duration
+	isRotating         bool // Flag to suppress status checks during IP rotation / 标志位: IP轮换期间抑制状态检查
 	recoverCount       int
 	recoverFirstFailAt time.Time // 本轮连续恢复失败的首次时间，用于 MaxRecoverElapsed 判据
 	lastIPCheck        time.Time
@@ -660,7 +660,17 @@ func (m *Manager) Connect() error {
 func (m *Manager) Disconnect() error {
 	m.mu.Lock()
 	if !m.coreReady {
+		// Disconnect is an idempotent desired-state operation. During core
+		// bootstrap there cannot be a data call owned by this manager yet, so
+		// clearing the intent is already a successful disconnect. Returning an
+		// error here made the API report failure after it had persisted the
+		// disabled network policy.
+		m.desiredConnection = false
+		hasData := m.handleV4 != 0 || m.handleV6 != 0 || m.state == StateConnected
 		m.mu.Unlock()
+		if !hasData {
+			return nil
+		}
 		return fmt.Errorf("manager core not started")
 	}
 	if m.state == StateStopping {
@@ -2307,7 +2317,7 @@ func (m *Manager) setState(s State) {
 }
 
 type startupServiceTask struct {
-	run  func(context.Context) error
+	run func(context.Context) error
 }
 
 func (m *Manager) runStartupServiceTasks(ctx context.Context, fatal bool, tasks []startupServiceTask) error {
@@ -3911,7 +3921,7 @@ func (m *Manager) handleIndication(evt qmi.Event) {
 					}
 					current, _ := m.snapshot.ServingSystem()
 					previousServing = current
-					
+
 					isChanged := false
 					if current != nil {
 						if hasServingTLV {

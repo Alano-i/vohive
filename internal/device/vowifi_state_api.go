@@ -2,12 +2,16 @@ package device
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/iniwex5/vohive/pkg/smscodec"
 	"github.com/iniwex5/vowifi-go/runtimehost"
 	"github.com/iniwex5/vowifi-go/runtimehost/messaging"
 )
+
+var ErrVoWiFiSMSNotReady = errors.New("vowifi sms not ready")
 
 func (p *Pool) GetVoWiFiApp() *runtimehost.Instance {
 	return p.GetVoWiFiAppForDevice()
@@ -39,6 +43,9 @@ func (p *Pool) SendVoWiFiSMSWithResult(ctx context.Context, deviceID, to, text s
 }
 
 func (p *Pool) SendVoWiFiSMSWithOptions(ctx context.Context, deviceID, to, text string, opts smscodec.SubmitOptions) (messaging.SendOutcome, error) {
+	if st, ok := p.GetVoWiFiRuntimeState(deviceID); ok && !st.SMSReady {
+		return messaging.SendOutcome{}, fmt.Errorf("%w: %s", ErrVoWiFiSMSNotReady, vowifiNotReadyMessage(st))
+	}
 	if inst := p.voWiFiHost().Instance(deviceID); inst != nil {
 		svc := inst.Service()
 		if svc == nil {
@@ -46,7 +53,43 @@ func (p *Pool) SendVoWiFiSMSWithOptions(ctx context.Context, deviceID, to, text 
 		}
 		return svc.SendSMSWithOptions(ctx, to, text, messaging.SendOptions{Encoding: string(opts.Encoding)})
 	}
-	return messaging.SendOutcome{}, fmt.Errorf("设备 %s 的 VoWiFi 未启动", deviceID)
+	return messaging.SendOutcome{}, fmt.Errorf("%w: 设备 %s 的 VoWiFi 未启动", ErrVoWiFiSMSNotReady, deviceID)
+}
+
+func vowifiNotReadyMessage(st runtimehost.State) string {
+	missing := vowifiMissingReadiness(st)
+	if missing == "" {
+		missing = "SMS"
+	}
+	phase := strings.TrimSpace(string(st.Phase))
+	if phase == "" {
+		phase = "unknown"
+	}
+	msg := fmt.Sprintf("%s 未就绪，当前阶段 %s", missing, phase)
+	if errText := strings.TrimSpace(st.LastError); errText != "" {
+		msg += "，最近错误: " + errText
+	}
+	return msg
+}
+
+func vowifiMissingReadiness(st runtimehost.State) string {
+	var missing []string
+	if !st.SIMReady {
+		missing = append(missing, "SIM")
+	}
+	if !st.AccessReady {
+		missing = append(missing, "Access")
+	}
+	if !st.TunnelReady {
+		missing = append(missing, "Tunnel")
+	}
+	if !st.IMSReady {
+		missing = append(missing, "IMS")
+	}
+	if !st.SMSReady {
+		missing = append(missing, "SMS")
+	}
+	return strings.Join(missing, " / ")
 }
 
 func (p *Pool) IsVoWiFiActive(deviceID string) bool {

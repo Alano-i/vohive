@@ -92,6 +92,67 @@ func TestLifecycleControllerSwitchBeginPreemptsInFlightEnable(t *testing.T) {
 	}
 }
 
+func TestLifecycleControllerDisablePreemptsInFlightEnable(t *testing.T) {
+	c := NewLifecycleController()
+
+	enableStarted := make(chan LifecycleCommand, 1)
+	enableCanceled := make(chan struct{}, 1)
+	disableStarted := make(chan LifecycleCommand, 1)
+	done := make(chan error, 2)
+	c.TestRun = func(ctx context.Context, cmd LifecycleCommand) error {
+		switch cmd.Kind {
+		case LifecycleCommandEnable:
+			enableStarted <- cmd
+			<-ctx.Done()
+			enableCanceled <- struct{}{}
+			return ctx.Err()
+		case LifecycleCommandDisable:
+			disableStarted <- cmd
+			return nil
+		default:
+			return nil
+		}
+	}
+
+	go func() {
+		done <- c.Submit(context.Background(), LifecycleCommand{DeviceID: "dev-disable", Kind: LifecycleCommandEnable})
+	}()
+
+	var enableCmd LifecycleCommand
+	select {
+	case enableCmd = <-enableStarted:
+	case <-time.After(time.Second):
+		t.Fatal("enable command did not start")
+	}
+
+	go func() {
+		done <- c.Submit(context.Background(), LifecycleCommand{DeviceID: "dev-disable", Kind: LifecycleCommandDisable})
+	}()
+
+	select {
+	case disableCmd := <-disableStarted:
+		if disableCmd.Generation <= enableCmd.Generation {
+			t.Fatalf("disable generation = %d, want > enable generation %d", disableCmd.Generation, enableCmd.Generation)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("disable did not preempt in-flight enable")
+	}
+
+	select {
+	case <-enableCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight enable context was not canceled")
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for lifecycle command to finish")
+		}
+	}
+}
+
 func TestLifecycleControllerRestartPreemptsInFlightEnable(t *testing.T) {
 	c := NewLifecycleController()
 

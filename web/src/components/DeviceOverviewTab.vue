@@ -4,8 +4,9 @@ import { Eye24Regular, EyeOff24Regular } from '@vicons/fluent'
 import type { DeviceOverviewItem } from '../types/api'
 import { useSensitiveVisibility } from '../composables/useSensitiveVisibility'
 import { activeEsimProfileDisplayName } from './deviceOverviewActiveEsim'
-import { isControlOnline, isRadioRegistered, isRecoveryPhase, lifecycleStatusLabel } from '../utils/deviceLifecycle'
+import { isControlOnline, isRadioRegistered, isRecoveryPhase, isSIMMissing, lifecycleStatusLabel } from '../utils/deviceLifecycle'
 import StatusLight from './StatusLight.vue'
+import EmptyState from './EmptyState.vue'
 import OperatorSelectionDialog from './OperatorSelectionDialog.vue'
 import { Settings24Regular } from '@vicons/fluent'
 import type { StatusLightTone } from './statusLight'
@@ -86,6 +87,14 @@ function hasValidSignalDbm(dbm: number | null | undefined): dbm is number {
   return typeof dbm === 'number' && Number.isFinite(dbm) && dbm !== 0 && dbm !== -999
 }
 
+function radioMetric(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) && value !== 0 && value !== -999
+    ? String(value)
+    : '--'
+}
+
+const signalDbmDisplay = computed(() => radioMetric(props.device?.modem?.signal_dbm))
+
 // 0-5 格
 const signalLevel = computed<number>(() => {
   const dbm = props.device?.modem?.signal_dbm
@@ -139,14 +148,41 @@ const activeEsimProfileName = computed(() => activeEsimProfileDisplayName(props.
 const controlOnline = computed(() => isControlOnline(props.device))
 
 const isRegistered = computed(() => isRadioRegistered(props.device))
+const simMissing = computed(() => isSIMMissing(props.device))
 
 const cellularStatusTone = computed<StatusLightTone>(() => {
   if (isRecoveryPhase(props.device?.lifecycle_phase)) return 'warning'
+  if (simMissing.value) return 'danger'
   if (!controlOnline.value) return 'danger'
+  if (props.device?.registration_state_label === 'denied') return 'danger'
   return isRegistered.value ? 'success' : 'warning'
 })
 
+const cellularStatusStyles = computed(() => {
+  switch (cellularStatusTone.value) {
+    case 'success':
+      return {
+        panel: 'bg-emerald-50 border-emerald-200 dark:bg-emerald-500/10 dark:border-emerald-500/25',
+        text: 'text-emerald-700 dark:text-emerald-300',
+        icon: 'text-emerald-600 dark:text-emerald-400'
+      }
+    case 'warning':
+      return {
+        panel: 'bg-orange-50 border-orange-200 dark:bg-orange-500/10 dark:border-orange-500/25',
+        text: 'text-orange-700 dark:text-orange-300',
+        icon: 'text-orange-600 dark:text-orange-400'
+      }
+    default:
+      return {
+        panel: 'bg-red-50 border-red-200 dark:bg-red-500/10 dark:border-red-500/25',
+        text: 'text-red-700 dark:text-red-300',
+        icon: 'text-red-600 dark:text-red-400'
+      }
+  }
+})
+
 const cellularStatusText = computed(() => {
+  if (simMissing.value) return '未插卡'
   const phaseText = lifecycleStatusLabel(props.device?.lifecycle_phase)
   if (phaseText && props.device?.lifecycle_phase !== 'online' && props.device?.lifecycle_phase !== 'offline') return phaseText
   if (!controlOnline.value) return props.device?.running ? '控制面恢复中' : '离线'
@@ -157,6 +193,7 @@ const cellularStatusText = computed(() => {
 })
 
 const networkPanelMessage = computed(() => {
+  if (simMissing.value) return '未插卡'
   if (!props.device?.network_enabled) return '数据未开启'
   if (!props.device?.network_connected) return '数据网络未连接'
   return ''
@@ -168,11 +205,11 @@ const networkPanelMessage = computed(() => {
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
     <!-- ===== 运行状态面板 ===== -->
-    <div class="ui-panel-muted p-4">
+    <div class="ui-panel-muted overview-panel-background p-4">
       <div class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">运行状态</div>
 
       <!-- ── VoWiFi 模式 ── -->
-      <template v-if="device?.vowifi_enabled">
+      <template v-if="device?.vowifi_enabled && !simMissing">
 
         <!-- Hero pill -->
         <div
@@ -243,22 +280,13 @@ const networkPanelMessage = computed(() => {
       <template v-else>
 
         <!-- 运营商 hero（与 VoWiFi pill 统一样式） -->
-        <div class="flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 mb-3 border"
-          :class="isRegistered
-            ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-500/10 dark:border-emerald-500/25'
-            : controlOnline
-              ? 'bg-amber-50 border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/25'
-              : 'bg-gray-100 border-gray-200 dark:bg-white/5 dark:border-white/10'"
+        <div
+          class="flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 mb-3 border"
+          :class="cellularStatusStyles.panel"
         >
-          <StatusLight :tone="cellularStatusTone" size="sm" :animated="isRegistered" />
+          <StatusLight :tone="cellularStatusTone" size="sm" :animated="cellularStatusTone !== 'danger'" />
           <div class="flex-1 min-w-0">
-            <div class="text-sm font-bold leading-tight"
-              :class="isRegistered
-                ? 'text-emerald-700 dark:text-emerald-300'
-                : controlOnline
-                  ? 'text-amber-700 dark:text-amber-300'
-                  : 'text-gray-500 dark:text-gray-400'"
-            >
+            <div class="text-sm font-bold leading-tight" :class="cellularStatusStyles.text">
               <template v-if="isRegistered">
                 {{ device?.modem?.operator || '--' }}
                 <span v-if="device?.modem?.network_mode" class="opacity-70">· {{ [device?.modem?.network_duplex, device?.modem?.network_mode].filter(Boolean).join(' ') }}</span>
@@ -269,7 +297,7 @@ const networkPanelMessage = computed(() => {
             </div>
           </div>
           <button @click="showOperatorSelection = true" class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 transition-colors" title="网络选择设置">
-            <Settings24Regular class="w-5 h-5 text-gray-500 dark:text-gray-400" />
+            <Settings24Regular class="w-5 h-5" :class="cellularStatusStyles.icon" />
           </button>
         </div>
 
@@ -279,19 +307,19 @@ const networkPanelMessage = computed(() => {
           <div class="flex items-center gap-3">
             <div>
               <div class="flex items-baseline gap-1">
-                <span class="text-2xl font-extrabold tabular-nums leading-none" :class="signalColorClass">
-                  {{ device?.modem?.signal_dbm ?? '--' }}
+                <span class="signal-strength-number text-2xl font-extrabold tabular-nums leading-none" :class="signalColorClass">
+                  {{ signalDbmDisplay }}
                 </span>
                 <span class="text-xs text-gray-400">dBm</span>
               </div>
               <div class="text-[10px] text-gray-400 mt-1">
-                RSRP {{ device?.modem?.signal_rsrp ?? '--' }}
+                RSRP {{ radioMetric(device?.modem?.signal_rsrp) }}
                 &nbsp;·&nbsp;
-                RSRQ {{ device?.modem?.signal_rsrq ?? '--' }}
+                RSRQ {{ radioMetric(device?.modem?.signal_rsrq) }}
                 &nbsp;·&nbsp;
-                SINR {{ device?.modem?.signal_sinr ?? '--' }}
-                <template v-if="device?.modem?.nr5g_signal_sinr !== undefined">
-                  &nbsp;·&nbsp;NR5G SINR {{ device?.modem?.nr5g_signal_sinr }}
+                SINR {{ radioMetric(device?.modem?.signal_sinr) }}
+                <template v-if="radioMetric(device?.modem?.nr5g_signal_sinr) !== '--'">
+                  &nbsp;·&nbsp;NR5G SINR {{ radioMetric(device?.modem?.nr5g_signal_sinr) }}
                 </template>
               </div>
             </div>
@@ -307,7 +335,7 @@ const networkPanelMessage = computed(() => {
         </div>
 
         <!-- 次要字段 -->
-        <div class="space-y-1.5 text-sm text-gray-700 dark:text-gray-200">
+        <div class="space-y-2.5 text-xs text-gray-700 dark:text-gray-200">
           <FieldRow label="网络模式"  :value="[device?.modem?.network_duplex, device?.modem?.network_mode].filter(Boolean).join(' ') || '--'" monospace />
           <FieldRow label="频段"  :value="device?.modem?.radio_band || '--'" monospace />
           <FieldRow label="信道"  :value="device?.modem?.radio_channel ? String(device.modem.radio_channel) : '--'" monospace />
@@ -317,7 +345,7 @@ const networkPanelMessage = computed(() => {
     </div>
 
     <!-- ===== SIM / 设备面板（不变）===== -->
-    <div class="ui-panel-muted p-4 relative min-w-0 overflow-hidden">
+    <div class="ui-panel-muted overview-panel-background p-4 relative min-w-0 overflow-hidden">
       <div class="flex items-center justify-between mb-2">
         <div class="text-xs font-bold text-gray-500 uppercase tracking-wider">SIM / 设备</div>
         <div class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 cursor-pointer -mt-1 -mr-1" @click="showSensitive = !showSensitive">
@@ -327,7 +355,7 @@ const networkPanelMessage = computed(() => {
           </el-icon>
         </div>
       </div>
-      <div class="text-sm space-y-1.5 text-gray-700 dark:text-gray-200">
+      <div class="text-xs space-y-[18px] text-gray-700 dark:text-gray-200">
         <FieldRow label="IMEI"      :value="device?.modem?.imei"   :sensitive="!showSensitive" monospace copyable />
         <FieldRow label="ICCID"     :value="device?.modem?.iccid"  :sensitive="!showSensitive" monospace copyable />
         <FieldRow label="IMSI"      :value="device?.modem?.imsi"   :sensitive="!showSensitive" monospace copyable />
@@ -357,11 +385,14 @@ const networkPanelMessage = computed(() => {
     </div>
 
     <!-- ===== 流量面板（不变）===== -->
-    <div class="ui-panel-muted p-4">
+    <div class="ui-panel-muted overview-panel-background flex flex-col p-4">
       <div class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">网络</div>
-      <div v-if="networkPanelMessage" class="flex items-center justify-center p-6 text-sm text-gray-400">
-        {{ networkPanelMessage }}
-      </div>
+      <EmptyState
+        v-if="networkPanelMessage"
+        bare
+        class="network-empty-state flex flex-1 flex-col justify-center !py-6"
+        :title="networkPanelMessage"
+      />
       <div v-else class="text-sm space-y-1.5 text-gray-700 dark:text-gray-200">
         <FieldRow label="内网 IPv4"     :value="device?.private_ip"           monospace copyable />
         <FieldRow label="内网 IPv6"   :value="device?.private_ipv6"         monospace copyable />
@@ -383,3 +414,22 @@ const networkPanelMessage = computed(() => {
     />
   </div>
 </template>
+
+<style scoped>
+.overview-panel-background {
+  border: 0 !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:deep(.network-empty-state .empty-state-title) {
+  font-size: 12px;
+}
+
+.signal-strength-number {
+  font-family: "VoHive Number", "SFMono-Regular", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+</style>

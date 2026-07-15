@@ -1,0 +1,32 @@
+root = "."
+tmp_dir = ".cache/air"
+
+[build]
+cmd = "go build -trimpath -buildvcs=false -tags 'with_utls nomsgpack' -o ./.cache/air/vohive ./cmd/vohive"
+entrypoint = ["./.cache/air/vohive", "-c", "config/config.yaml", "-backend-only"]
+delay = 700
+exclude_dir = [".git", ".cache", "data", "dist", "logs", "web", "internal/web/dist"]
+exclude_regex = ["_test\\.go$"]
+include_ext = ["go", "yaml", "yml"]
+kill_delay = "2s"
+log = "air-build-errors.log"
+send_interrupt = true
+stop_on_error = true
+
+[color]
+app = ""
+build = "yellow"
+main = "magenta"
+runner = "green"
+watcher = "cyan"
+
+[log]
+main_only = false
+time = false
+
+[misc]
+clean_on_exit = true
+
+[screen]
+clear_on_rebuild = false
+keep_scroll = true

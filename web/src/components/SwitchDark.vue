@@ -15,7 +15,7 @@ function onToggle() {
 </script>
 
 <template>
-  <el-button circle @click="onToggle" class="!border-0 !bg-gray-100/70 dark:!bg-white/5">
+  <el-button circle aria-label="切换明暗主题" @click="onToggle" class="theme-toggle-button !bg-white/50 dark:!bg-white/5">
     <el-icon v-if="isDark"><WeatherSunny24Regular /></el-icon>
     <el-icon v-else><WeatherMoon24Regular /></el-icon>
   </el-button>

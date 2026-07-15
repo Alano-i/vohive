@@ -94,3 +94,22 @@ func TestRunICCIDReKeyMigrationIdempotent(t *testing.T) {
 		}
 	}
 }
+
+func TestRunICCIDReKeyMigrationReplacesSyntheticKey(t *testing.T) {
+	openTestDB(t)
+	if err := DB.Create(&SIMCard{ICCID: "ICC_REAL", IMSI: "IMSI_REAL"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DB.Exec("INSERT INTO sms (iccid, imsi, peer, content) VALUES (?,?,?,?)", "imsi:IMSI_REAL", "IMSI_REAL", "+100", "hi").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RunICCIDReKeyMigration(DB); err != nil {
+		t.Fatal(err)
+	}
+	var iccid string
+	DB.Raw("SELECT iccid FROM sms WHERE imsi = ?", "IMSI_REAL").Scan(&iccid)
+	if iccid != "ICC_REAL" {
+		t.Fatalf("synthetic key was not replaced: %q", iccid)
+	}
+}

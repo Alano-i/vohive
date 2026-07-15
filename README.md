@@ -34,6 +34,21 @@ VoHive 把模组热插拔管理、SOCKS5/HTTP 代理编排、短信收发、VoWi
 
 ## 安装与卸载
 
+### 本地联合开发
+
+本机已安装 Go、Node.js 与 npm 后，执行：
+
+```sh
+make dev
+```
+
+该命令会自动创建被 Git 忽略的 `config/config.yaml`，并同时启动：
+
+- 前端开发服务器：`http://127.0.0.1:5173`，支持 Vue/Vite 热更新。
+- 后端 API：`http://127.0.0.1:7575`，修改 Go 或 YAML 文件后自动重新构建并启动。
+
+首次运行会下载后端热重载工具并按需安装前端依赖。默认开发账号为 `admin / admin`，按 `Ctrl+C` 可同时停止前后端。
+
 ### Debian 一键安装
 
 在 Debian 或 Debian 兼容系统上执行:
@@ -61,6 +76,11 @@ curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install
 - 工作目录: `/var/lib/vohive`
 - systemd 服务: `vohive.service`
 - Web 管理地址: `http://<服务器IP>:7575`
+
+对于 DJI Baiwang (`2ca3:4006`) 设备，安装器还会配置启动前 USB
+准备服务：主机每次开机时先通过专用 AT 接口重启仍由 USB 供电的模组，
+等待重新枚举并绑定 `option` + `qmi_wwan` 后再启动 VoHive，避免上一次
+进程遗留的 QMI CTL 响应导致设备在线但数据面和 SIM 身份不可用。
 
 ### 本地二进制安装
 

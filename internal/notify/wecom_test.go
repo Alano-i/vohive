@@ -159,3 +159,27 @@ func TestWeComChannelRequiresRecipient(t *testing.T) {
 		t.Fatalf("url=%q, want empty", payload.News.Articles[0].URL)
 	}
 }
+
+func TestWeComChannelNonSMSEventUsesEventText(t *testing.T) {
+	ch := &WeComChannel{cfg: config.WeComConfig{
+		ArticleTitle:       config.DefaultWeComArticleTitle,
+		ArticleDescription: config.DefaultWeComArticleDescription,
+		ArticlePicURL:      config.DefaultWeComArticlePicURL,
+	}}
+
+	payload, err := ch.buildPayload(NotificationContext{
+		Event:     "raw",
+		Text:      "设备 DJI Baiwang3 SIM 卡掉线: SIM 卡未插入或状态异常",
+		Timestamp: time.Date(2026, 7, 13, 21, 57, 15, 0, time.Local),
+	})
+	if err != nil {
+		t.Fatalf("buildPayload() error = %v", err)
+	}
+	article := payload.News.Articles[0]
+	if article.Title != "VoHive 通知" {
+		t.Fatalf("title=%q, want VoHive 通知", article.Title)
+	}
+	if article.Description != "设备 DJI Baiwang3 SIM 卡掉线: SIM 卡未插入或状态异常" {
+		t.Fatalf("description=%q", article.Description)
+	}
+}

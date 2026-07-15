@@ -2,6 +2,7 @@ import { ref, watch } from 'vue'
 import type { Ref } from 'vue'
 
 const SENSITIVE_VISIBILITY_STORAGE_KEY = 'vohive_show_sensitive'
+export const SENSITIVE_VALUE_PLACEHOLDER = '**** ****'
 
 function readSensitiveVisibility(): boolean {
   try {

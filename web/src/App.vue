@@ -31,6 +31,7 @@ function updateHtmlClass(mode: 'dark' | 'light') {
   } else {
     document.documentElement.classList.remove('dark')
   }
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mode === 'dark' ? '#080d18' : '#edf2f8')
 }
 
 onMounted(() => {
@@ -81,7 +82,7 @@ const shell = computed(() =>
 </script>
 
 <template>
-  <div class="h-screen w-screen overflow-hidden bg-gray-50 dark:bg-[#101014] text-gray-900 dark:text-gray-100 font-sans selection:bg-indigo-500 selection:text-white transition-colors duration-300">
+  <div class="vh-app-root font-sans transition-colors duration-300">
     <Suspense>
       <template #default>
         <component :is="shell" :is-dark="isDark" @toggle-theme="toggleTheme" />
@@ -96,10 +97,10 @@ const shell = computed(() =>
       <div v-if="showDisclaimer" class="disclaimer-overlay fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-md">
         <div class="disclaimer-dialog relative w-full max-w-lg p-8 mx-4 overflow-hidden bg-white/90 dark:bg-gray-900/90 backdrop-blur-2xl rounded-3xl shadow-2xl border border-white/20 dark:border-gray-700/50">
           <!-- 装饰性渐变背景 -->
-          <div class="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-indigo-500/20 to-transparent pointer-events-none"></div>
+          <div class="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-primary-500/20 to-transparent pointer-events-none"></div>
           
           <div class="disclaimer-dialog-content relative z-10 flex min-h-0 flex-col">
-            <div class="disclaimer-icon flex items-center justify-center w-16 h-16 mx-auto mb-6 bg-gradient-to-br from-[#5b5bd6] to-[#4a4ac2] rounded-2xl shadow-lg shadow-indigo-500/30">
+            <div class="disclaimer-icon flex items-center justify-center w-16 h-16 mx-auto mb-6 bg-gradient-to-br from-[#2557ca] to-[#1947ad] rounded-2xl shadow-lg shadow-blue-700/30">
               <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
@@ -109,36 +110,36 @@ const shell = computed(() =>
             
             <div class="disclaimer-body space-y-4 text-[14px] text-gray-600 dark:text-gray-300 leading-relaxed font-medium">
               <div class="flex items-start">
-                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full dark:text-indigo-300 dark:bg-indigo-900/60 shadow-sm">1</div>
-                <p>本软件（VoHive）属于个人开发者业余时间开发的工具软件，仅供技术研究、学习交流和个人内部测试使用。<strong class="text-indigo-600 dark:text-indigo-400">严禁用于任何商业用途</strong>，严禁作为生产环境的基础设施。</p>
+                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-primary-700 bg-primary-100 rounded-full dark:text-primary-300 dark:bg-primary-900/60 shadow-sm">1</div>
+                <p>本软件（VoHive）属于个人开发者业余时间开发的工具软件，仅供技术研究、学习交流和个人内部测试使用。<strong class="text-primary-600 dark:text-primary-400">严禁用于任何商业用途</strong>，严禁作为生产环境的基础设施。</p>
               </div>
               <div class="flex items-start">
-                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full dark:text-indigo-300 dark:bg-indigo-900/60 shadow-sm">2</div>
+                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-primary-700 bg-primary-100 rounded-full dark:text-primary-300 dark:bg-primary-900/60 shadow-sm">2</div>
                 <p>使用者承诺将严格遵守所在国家或地区的相关法律法规。<strong class="text-red-500 dark:text-red-400">严禁将本软件用于电信诈骗、垃圾短信发送、非法网络代理、渗透测试等任何非法或违规场景</strong>。</p>
               </div>
               <div class="flex items-start">
-                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full dark:text-indigo-300 dark:bg-indigo-900/60 shadow-sm">3</div>
+                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-primary-700 bg-primary-100 rounded-full dark:text-primary-300 dark:bg-primary-900/60 shadow-sm">3</div>
                 <p>本软件涉及底层 Modem 通信操作，可能包含未知的缺陷。对于因使用本软件引发的硬件损坏、通信资费异常、隐私泄露等直接或间接损失，<strong>由使用者自行承担所有责任</strong>。</p>
               </div>
               <div class="flex items-start">
-                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full dark:text-indigo-300 dark:bg-indigo-900/60 shadow-sm">4</div>
+                <div class="flex-shrink-0 flex items-center justify-center w-6 h-6 mt-0.5 mr-3 text-xs font-bold text-primary-700 bg-primary-100 rounded-full dark:text-primary-300 dark:bg-primary-900/60 shadow-sm">4</div>
                 <p>一旦点击继续即表示无条件接受本协议。如果您拒绝，本软件将立即触发自毁与环境清理机制以确保设备安全。</p>
               </div>
             </div>
             
             <div class="disclaimer-actions mt-6 pt-5 border-t border-gray-100 dark:border-gray-800">
               <p v-if="manualConfirmRequired" class="mb-3 text-xs font-bold text-center text-gray-500 dark:text-gray-400">
-                请输入「<span class="text-indigo-600 dark:text-indigo-400 select-all">{{ expectedConfirmText }}</span>」以解锁按钮
+                请输入「<span class="text-primary-600 dark:text-primary-400 select-all">{{ expectedConfirmText }}</span>」以解锁按钮
               </p>
               <p v-else class="mb-3 text-xs font-bold text-center text-gray-500 dark:text-gray-400">
-                本次为周期性确认，点击「<span class="text-indigo-600 dark:text-indigo-400">{{ expectedConfirmText }}</span>」即可继续
+                本次为周期性确认，点击「<span class="text-primary-600 dark:text-primary-400">{{ expectedConfirmText }}</span>」即可继续
               </p>
               
               <div v-if="manualConfirmRequired" class="disclaimer-input-wrap mb-5">
                 <input 
                   type="text" 
                   v-model="confirmText" 
-                  class="w-full px-4 py-3 text-center text-sm font-semibold bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 outline-none transition-all dark:bg-gray-800/80 dark:border-gray-700 dark:text-white dark:focus:border-indigo-500 placeholder-gray-400 dark:placeholder-gray-500"
+                  class="w-full px-4 py-3 text-center text-sm font-semibold bg-gray-50 border border-gray-200 rounded-xl shadow-none focus:shadow-none focus:ring-0 focus:border-primary-500 outline-none transition-all dark:bg-gray-800/80 dark:border-gray-700 dark:text-white dark:focus:border-primary-500 placeholder-gray-400 dark:placeholder-gray-500"
                   :placeholder="`请输入：${expectedConfirmText}`"
                   @paste.prevent
                   autocomplete="off"
@@ -153,9 +154,9 @@ const shell = computed(() =>
                   @click="acceptDisclaimer" 
                   :disabled="!canAccept"
                   :class="[
-                    'flex-[1.5] px-4 py-3 text-sm font-bold tracking-wide transition-all duration-300 rounded-xl',
+                    'flex-[1.5] border-0 px-4 py-3 text-sm font-bold tracking-wide transition-all duration-300 rounded-xl',
                     canAccept 
-                      ? 'text-white bg-gradient-to-r from-[#5b5bd6] to-[#4a4ac2] shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 hover:-translate-y-0.5 active:translate-y-0 cursor-pointer'
+                      ? 'text-white bg-gradient-to-r from-[#2557ca] to-[#1947ad] shadow-lg shadow-blue-700/30 hover:shadow-blue-700/50 hover:-translate-y-0.5 active:translate-y-0 cursor-pointer'
                       : 'text-gray-400 dark:text-gray-500 bg-gray-200 dark:bg-gray-800 shadow-none cursor-not-allowed border border-gray-300 dark:border-gray-700 opacity-60'
                   ]"
                 >
