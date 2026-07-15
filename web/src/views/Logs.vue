@@ -98,7 +98,7 @@ function clearLogs() {
 // 导出日志
 function exportLogs() {
   const content = filteredLogs.value.map(log => {
-    const time = new Date(log.time).toLocaleString()
+    const time = formatDateTime(log.time)
     const fields = log.fields ? ` ${log.fields}` : ''
     return `[${time}] ${log.level.toUpperCase().padEnd(5)} ${log.caller} ${log.message}${fields}`
   }).join('\n')
@@ -127,18 +127,15 @@ function getLevelClass(level: string): string {
 
 // 格式化日期时间
 function formatDateTime(isoTime: string): string {
-  try {
-    const d = new Date(isoTime)
-    const yyyy = d.getFullYear()
-    const MM = String(d.getMonth() + 1).padStart(2, '0')
-    const dd = String(d.getDate()).padStart(2, '0')
-    const HH = String(d.getHours()).padStart(2, '0')
-    const mm = String(d.getMinutes()).padStart(2, '0')
-    const ss = String(d.getSeconds()).padStart(2, '0')
-    return `${yyyy}-${MM}-${dd} ${HH}:${mm}:${ss}`
-  } catch {
-    return isoTime
-  }
+  const d = new Date(isoTime)
+  if (Number.isNaN(d.getTime())) return isoTime || '--'
+  const yyyy = d.getFullYear()
+  const MM = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const HH = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  const ss = String(d.getSeconds()).padStart(2, '0')
+  return `${yyyy}-${MM}-${dd} ${HH}:${mm}:${ss}`
 }
 
 // 加载历史日志

@@ -94,6 +94,10 @@ type Server struct {
 	// networkRecovery is overridden by focused API tests. Production uses
 	// beginNetworkControlRecovery's modem reboot and rescan path.
 	networkRecovery func(context.Context, *device.Worker) error
+
+	// vowifiEnableRequest is overridden by focused API tests. Production queues
+	// the desired-state startup through Pool.RequestEnableVoWiFi.
+	vowifiEnableRequest func(string) error
 }
 
 type realtimeTrafficSubscriber interface {

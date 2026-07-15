@@ -310,6 +310,11 @@ func (w *Worker) getSMSCWithContext(ctx context.Context) (string, error) {
 	if w == nil {
 		return "", fmt.Errorf("worker 为空")
 	}
+	if w.QMICore != nil {
+		if v, err := w.QMICore.GetSMSC(ctx); err == nil {
+			return strings.TrimSpace(v), nil
+		}
+	}
 	if w.Backend != nil {
 		if provider, ok := w.Backend.(backend.SMSCProvider); ok {
 			v, err := provider.GetSMSC(ctx)

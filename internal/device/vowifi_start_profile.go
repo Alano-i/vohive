@@ -20,14 +20,9 @@ func (p *Pool) buildVoWiFiStartProfile(worker *Worker, traceID string) (identity
 		return identity.Profile{}, fmt.Errorf("backend_not_available")
 	}
 
-	reader, ok := worker.Backend.(liveSIMIdentityReader)
-	if !ok {
-		return identity.Profile{}, fmt.Errorf("live_identity_not_supported")
-	}
-
 	liveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	imsi, err := reader.GetIMSILive(liveCtx)
+	imsi, err := readVoWiFiLiveIMSI(liveCtx, worker)
 	if err != nil {
 		return identity.Profile{}, fmt.Errorf("实时读取 IMSI 失败: %w", err)
 	}
@@ -74,6 +69,22 @@ func (p *Pool) buildVoWiFiStartProfile(worker *Worker, traceID string) (identity
 	return buildVoWiFiRawProfile(imsi, mcc, mnc, imei, smsc), nil
 }
 
+func readVoWiFiLiveIMSI(ctx context.Context, worker *Worker) (string, error) {
+	if worker == nil {
+		return "", fmt.Errorf("worker_nil")
+	}
+	if worker.QMICore != nil {
+		if imsi, err := worker.QMICore.GetIMSI(ctx); err == nil && strings.TrimSpace(imsi) != "" {
+			return imsi, nil
+		}
+	}
+	reader, ok := worker.Backend.(liveSIMIdentityReader)
+	if !ok {
+		return "", fmt.Errorf("live_identity_not_supported")
+	}
+	return reader.GetIMSILive(ctx)
+}
+
 func buildVoWiFiRawProfile(imsi, mcc, mnc, imei, smsc string) identity.Profile {
 	return identity.Profile{
 		IMSI: strings.TrimSpace(imsi),
@@ -86,6 +97,19 @@ func buildVoWiFiRawProfile(imsi, mcc, mnc, imei, smsc string) identity.Profile {
 
 func resolveVoWiFiProfileMCCMNC(ctx context.Context, worker *Worker, status modem.DeviceStatus, imsi, traceID string) (mcc, mnc, source string) {
 	imsi = strings.TrimSpace(imsi)
+	if worker != nil && worker.QMICore != nil {
+		if liveMCC, liveMNC, err := worker.QMICore.GetNativeMCCMNC(ctx); err == nil {
+			liveMCC = strings.TrimSpace(liveMCC)
+			liveMNC = strings.TrimSpace(liveMNC)
+			if liveMCC != "" && liveMNC != "" {
+				cacheVoWiFiProfileMCCMNC(worker, liveMCC, liveMNC)
+				return liveMCC, liveMNC, "sim_home_qmi"
+			}
+		} else {
+			logger.Debug("VoWiFi 启动前通过 QMI 读取 SIM 归属 MCC/MNC 失败，将尝试后端或缓存",
+				"trace_id", traceID, "device", worker.ID, "err", err)
+		}
+	}
 	if worker != nil && worker.Backend != nil {
 		if liveMCC, liveMNC, err := worker.Backend.GetNativeMCCMNC(ctx); err == nil {
 			liveMCC = strings.TrimSpace(liveMCC)

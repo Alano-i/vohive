@@ -642,7 +642,10 @@ async function fetchCardPolicy(iccid: string | undefined) {
     cardPolicy.value = null
     return
   }
-  const result = await cardsService.getPolicy(iccid)
+  const requestedICCID = iccid
+  const result = await cardsService.getPolicy(requestedICCID)
+  // 切换设备时旧请求可能晚于新请求返回，不能让旧卡策略覆盖当前设备。
+  if (selectedPolicyICCID.value !== requestedICCID) return
   if (result.ok) {
     cardPolicy.value = result.data
   }
@@ -1372,6 +1375,7 @@ usePollingScheduler(async () => {
             </el-tab-pane>
             <el-tab-pane label="卡策略" name="card" lazy>
               <CardPolicyPanel
+                :key="selectedDevice.id"
                 :device-id="selectedDevice.id"
                 :iccid="selectedPolicyICCID"
                 :policy="cardPolicy"

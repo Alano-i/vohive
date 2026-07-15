@@ -184,22 +184,63 @@ func (s *Server) handleDeviceVoWiFiPatch(c *gin.Context) {
 	}
 
 	deviceID := deviceIDParam(c)
+	if s.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "error", "message": "服务未就绪"})
+		return
+	}
 
 	if *req.Enabled {
 		// 落库：仅置 vowifi_enabled=true。不碰 airplane_enabled——它是用户的纯飞行
 		// 意图，作为关闭 VoWiFi 后的回退依据；VoWiFi 接管射频由运行时投影派生。
-		s.patchCardPolicyForDevice(deviceID, vowifiEnablePolicyMutation)
+		iccid, applied, err := s.patchCardPolicyForDevice(deviceID, vowifiEnablePolicyMutation)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
+			return
+		}
+		if !applied {
+			c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "设备尚未识别到 SIM 卡 ICCID，无法保存 VoWiFi 策略"})
+			return
+		}
 		// 同步 w.Config，使概览即时切到 VoWiFi 模式面板（EnableVoWiFi 不碰 Config）。
 		s.pool.SetWorkerVoWiFiPolicy(deviceID, true)
-		s.handleVoWiFiEnable(c)
+		if err := s.requestVoWiFiEnable(deviceID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"status":  "error",
+				"message": "VoWiFi 启动请求失败: " + err.Error(),
+				"device":  deviceID,
+			})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{
+			"status":  "accepted",
+			"message": "VoWiFi 开启目标已保存，正在后台建立连接",
+			"device":  deviceID,
+			"iccid":   iccid,
+			"desired": true,
+		})
 		return
 	}
 
 	// 落库：仅清 vowifi_enabled=false，保留 airplane_enabled（用户飞行意图）。
 	// 关闭 VoWiFi 后 DisableVoWiFi 会按当前卡策略重投影：之前是飞行则回飞行，否则回在线。
-	s.patchCardPolicyForDevice(deviceID, vowifiDisablePolicyMutation)
+	_, applied, err := s.patchCardPolicyForDevice(deviceID, vowifiDisablePolicyMutation)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
+		return
+	}
+	if !applied {
+		c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "设备尚未识别到 SIM 卡 ICCID，无法保存 VoWiFi 策略"})
+		return
+	}
 	s.pool.SetWorkerVoWiFiPolicy(deviceID, false)
 	s.handleVoWiFiDisable(c)
+}
+
+func (s *Server) requestVoWiFiEnable(deviceID string) error {
+	if s.vowifiEnableRequest != nil {
+		return s.vowifiEnableRequest(deviceID)
+	}
+	return s.pool.RequestEnableVoWiFi(deviceID)
 }
 
 // vowifiEnablePolicyMutation 开 VoWiFi 的落库副作用：只置 vowifi，飞行意图保持不变。
