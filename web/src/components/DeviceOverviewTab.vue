@@ -194,6 +194,7 @@ const cellularStatusText = computed(() => {
 
 const networkPanelMessage = computed(() => {
   if (simMissing.value) return '未插卡'
+  if (props.device?.network_connected || String(props.device?.public_ip || '').trim() || String(props.device?.public_ipv6 || '').trim()) return ''
   if (!props.device?.network_enabled) return '数据未开启'
   if (!props.device?.network_connected) return '数据网络未连接'
   return ''

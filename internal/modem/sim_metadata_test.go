@@ -118,6 +118,16 @@ func TestHomeMCCMNCFromIMSIAndEFADFallsBackToHeuristic(t *testing.T) {
 	}
 }
 
+func TestHomeMCCMNCFromHongKongIMSIUsesTwoDigitMNC(t *testing.T) {
+	mcc, mnc, mncLen, source, err := HomeMCCMNCFromIMSIAndEFAD("454003063217645", nil)
+	if err != nil {
+		t.Fatalf("HomeMCCMNCFromIMSIAndEFAD() error = %v", err)
+	}
+	if mcc != "454" || mnc != "00" || mncLen != 2 || source != "imsi_heuristic" {
+		t.Fatalf("mcc/mnc/len/source = %s/%s/%d/%s, want 454/00/2/imsi_heuristic", mcc, mnc, mncLen, source)
+	}
+}
+
 func TestDecodeSIMServiceTable(t *testing.T) {
 	table := DecodeSIMServiceTable("UST", []byte{0x05, 0x80, 0xFF})
 	if table == nil {

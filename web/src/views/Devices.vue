@@ -168,7 +168,15 @@ const selectedDevice = computed<DeviceOverviewItem | null>(() => {
 })
 
 const lastKnownSIMIdentityByDevice = reactive(new Map<string, { iccid: string; imsi: string }>())
-const selectedDeviceEsimCapable = computed(() => esimCapableDeviceIds.value.has(selectedId.value))
+function isDeviceEsimEnabled(device: Pick<DeviceMgmtListItem | DeviceOverviewItem, 'esim_enabled'> | null | undefined): boolean {
+  return device?.esim_enabled === true
+}
+
+const selectedDeviceEsimCapable = computed(() => (
+  esimCapableDeviceIds.value.has(selectedId.value) ||
+  isDeviceEsimEnabled(selectedDetail.value) ||
+  isDeviceEsimEnabled(selectedListItem.value)
+))
 const selectedPolicyICCID = computed(() => {
   const detailICCID = String(selectedDetail.value?.modem?.iccid || '').trim()
   if (detailICCID) return detailICCID
@@ -684,15 +692,21 @@ async function fetchAll() {
     ])
     if (!listResult.ok) throw new Error(listResult.error.message)
     devices.value = (storeList.value || []) as DeviceMgmtListItem[]
-		// Capability is hardware-stable. A transient worker/eUICC query failure
-		// must not remove the eSIM tab after this device has already proved it is
-		// eSIM-capable.
-		if (capabilityResult.ok) {
-			esimCapableDeviceIds.value = new Set([
-				...esimCapableDeviceIds.value,
-				...capabilityResult.data.esimDeviceIds
-			])
-		}
+    const nextEsimCapableDeviceIds = new Set(esimCapableDeviceIds.value)
+    for (const device of devices.value) {
+      if (isDeviceEsimEnabled(device)) {
+        nextEsimCapableDeviceIds.add(device.id)
+      }
+    }
+    // Capability is hardware-stable. A transient worker/eUICC query failure
+    // must not remove the eSIM tab after this device has already proved it is
+    // eSIM-capable.
+    if (capabilityResult.ok) {
+      for (const id of capabilityResult.data.esimDeviceIds) {
+        nextEsimCapableDeviceIds.add(id)
+      }
+    }
+    esimCapableDeviceIds.value = nextEsimCapableDeviceIds
     loadLastOkAt.value = Date.now()
     applyRouteSelection()
 
@@ -1373,7 +1387,7 @@ usePollingScheduler(async () => {
             <el-tab-pane label="USSD 终端" name="ussd" lazy>
               <DeviceUssdTab :device-id="selectedDevice.id" />
             </el-tab-pane>
-            <el-tab-pane label="卡策略" name="card" lazy>
+            <el-tab-pane label="SIM卡设置" name="card" lazy>
               <CardPolicyPanel
                 :key="selectedDevice.id"
                 :device-id="selectedDevice.id"

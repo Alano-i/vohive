@@ -141,15 +141,51 @@ func ResolveEffectiveCarrierConfig(input EffectiveCarrierConfigInput) Config {
 		cfg.PresetID = "giffgaff_23410"
 		cfg.IKE.IKEProposals = []string{"aes256-sha512-prfsha512-modp2048"}
 		cfg.IKE.ESPProposals = []string{"aes256-sha512"}
+	case "228/2":
+		cfg.PresetID = "sunrise_22802"
+		cfg.EPDG.IPStack = "ipv4"
+		cfg.IKE.IKEProposals = []string{"aes128-sha256-modp2048"}
+		cfg.IKE.ESPProposals = []string{"aes128-sha256"}
 	case "204/4":
 		cfg.PresetID = "vodafone_nl_20404"
 		cfg.EPDG.APN = "ims"
+		cfg.EPDG.Host = "epdg.epc.mnc004.mcc204.pub.3gppnetwork.org"
+		cfg.IKE.IKEProposals = []string{"aes256-sha256-prfsha512-modp2048"}
+		cfg.IKE.ESPProposals = []string{"aes256-sha256"}
 	case "262/3":
 		cfg.PresetID = "o2_de_26203"
 		cfg.EPDG.Host = "epdg.epc.mnc003.mcc262.pub.3gppnetwork.org"
+		cfg.IKE.IKEProposals = []string{"aes256-sha256-prfsha1-modp2048"}
+		cfg.IKE.ESPProposals = []string{"aes256-sha256"}
 	case "262/7":
 		cfg.PresetID = "o2_de_26207_alias"
 		cfg.EPDG.Host = "epdg.epc.mnc007.mcc262.pub.3gppnetwork.org"
+		cfg.IKE.IKEProposals = []string{"aes256-sha256-prfsha1-modp2048"}
+		cfg.IKE.ESPProposals = []string{"aes256-sha256"}
+	case "454/0":
+		cfg.PresetID = "csl_454000"
+		cfg.EPDG.IPStack = "ipv4"
+		cfg.IKE.IKEProposals = []string{"aes256-sha256-modp2048"}
+		cfg.IKE.ESPProposals = []string{"aes256-sha256", "aes128-sha256"}
+	case "454/3":
+		cfg.PresetID = "three_hk_454003"
+		cfg.EPDG.Host = "wlan.three.com.hk"
+		cfg.EPDG.IPStack = "ipv4"
+		cfg.IKE.IKEProposals = []string{"aes256-sha256-modp2048"}
+		cfg.IKE.ESPProposals = []string{"aes256-sha256", "aes128-sha256"}
+	case "530/1":
+		cfg.PresetID = "one_nz_53001"
+	case "530/5":
+		cfg.PresetID = "spark_nz_53005"
+		cfg.EPDG.Host = "epdg.epc.mnc005.mcc530.pub.3gppnetwork.spark.co.nz"
+		cfg.IKE.IKEProposals = []string{"aes256-sha256-prfsha256-modp2048"}
+		cfg.IKE.ESPProposals = []string{"aes256-sha256"}
+	case "530/24":
+		cfg.PresetID = "2degrees_nz_53024"
+		cfg.EPDG.Host = "epdg.ims.2degrees.net.nz"
+		cfg.EPDG.IPStack = "ipv4"
+		cfg.IKE.IKEProposals = []string{"aes256-sha512-prfsha512-modp1024"}
+		cfg.IKE.ESPProposals = []string{"aes256-sha512"}
 	}
 
 	return cfg
@@ -227,7 +263,11 @@ func fallbackConfig(mcc, mnc string) Config {
 }
 
 func plmnKey(mcc, mnc string) string {
-	return mcc + "/" + strings.TrimLeft(mnc, "0")
+	keyMNC := strings.TrimLeft(mnc, "0")
+	if keyMNC == "" && strings.TrimSpace(mnc) != "" {
+		keyMNC = "0"
+	}
+	return mcc + "/" + keyMNC
 }
 
 func normalizeDigits(s string) string {

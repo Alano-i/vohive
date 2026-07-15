@@ -110,6 +110,7 @@ type Worker struct {
 	EsimMgr          *esim.Manager
 	stop             chan struct{}
 	stopOnce         sync.Once
+	atRuntimeMu      sync.Mutex
 
 	cachedIP            string
 	cachedPublicIPv6    string

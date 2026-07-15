@@ -1333,6 +1333,20 @@ func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 	workers := s.pool.GetAllWorkers()
 	items := make([]SMSProfileDevice, 0, len(workers))
 	esimDeviceIDs := make([]string, 0, len(workers))
+	esimDeviceSeen := make(map[string]bool, len(workers))
+	addESIMDeviceID := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" || esimDeviceSeen[id] {
+			return
+		}
+		esimDeviceSeen[id] = true
+		esimDeviceIDs = append(esimDeviceIDs, id)
+	}
+	for _, cfg := range managed {
+		if cfg.ESIMEnabled {
+			addESIMDeviceID(cfg.ID)
+		}
+	}
 	for _, worker := range workers {
 		status := worker.GetCachedDeviceStatus()
 		currentICCID := strings.TrimSpace(worker.CurrentICCID())
@@ -1347,7 +1361,7 @@ func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 		if worker.EsimMgr != nil {
 			if groups, err := worker.EsimMgr.GetProfiles(); err == nil {
 				if len(groups) > 0 {
-					esimDeviceIDs = append(esimDeviceIDs, worker.ID)
+					addESIMDeviceID(worker.ID)
 				}
 				for _, group := range groups {
 					for _, profile := range group.Profiles {

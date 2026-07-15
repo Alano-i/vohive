@@ -73,6 +73,7 @@ const registrationText = (d: DeviceMgmtListItem) => {
 
 const dataNetworkText = (d: DeviceMgmtListItem) => {
   if (d?.vowifi_enabled) return ''
+  if (d?.network_connected || String(d?.public_ip || '').trim() || String(d?.public_ipv6 || '').trim()) return ''
   if (!d?.network_enabled) return '数据未开启'
   if (!d?.network_connected) return '数据网络未连接'
   return ''

@@ -76,6 +76,11 @@ func shouldRetryVoWiFiAutoStart(err error) bool {
 	if err == nil {
 		return false
 	}
+	errText := strings.ToLower(err.Error())
+	if strings.Contains(errText, "epdg dns") &&
+		(strings.Contains(errText, "不可用地址") || strings.Contains(errText, "127.0.0.1")) {
+		return false
+	}
 	return !carrier.IsVoWiFiPolicyBlockedError(err)
 }
 

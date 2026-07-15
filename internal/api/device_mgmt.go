@@ -39,6 +39,7 @@ type deviceConfigDTO struct {
 	QMIProxyPath          *string `json:"qmi_proxy_path,omitempty"`
 	QMIProxyExecutable    *string `json:"qmi_proxy_executable,omitempty"`
 	ESIMTransport         string  `json:"esim_transport,omitempty"`
+	ESIMEnabled           bool    `json:"esim_enabled"`
 	BaudRate              int     `json:"baud_rate,omitempty"`
 	DataBits              int     `json:"data_bits,omitempty"`
 	StopBits              int     `json:"stop_bits,omitempty"`
@@ -68,6 +69,7 @@ func deviceConfigToDTO(c config.DeviceConfig) deviceConfigDTO {
 		QMIProxyPath:          stringPtr(c.QMIProxyPath),
 		QMIProxyExecutable:    stringPtr(c.QMIProxyExecutable),
 		ESIMTransport:         config.NormalizeESIMTransport(c.ESIMTransport),
+		ESIMEnabled:           c.ESIMEnabled,
 		BaudRate:              c.BaudRate,
 		DataBits:              c.DataBits,
 		StopBits:              c.StopBits,
@@ -123,6 +125,7 @@ func deviceConfigFromDTOWithBase(d deviceConfigDTO, base *config.DeviceConfig) c
 		QMIProxyPath:          qmiProxyPath,
 		QMIProxyExecutable:    qmiProxyExecutable,
 		ESIMTransport:         config.NormalizeESIMTransport(d.ESIMTransport),
+		ESIMEnabled:           d.ESIMEnabled,
 		BaudRate:              d.BaudRate,
 		DataBits:              d.DataBits,
 		StopBits:              d.StopBits,
@@ -360,6 +363,7 @@ type deviceMgmtOverviewLiteItem struct {
 	Interface              string             `json:"interface,omitempty"`
 	ControlDevice          string             `json:"control_device,omitempty"`
 	ESIMTransport          string             `json:"esim_transport,omitempty"`
+	ESIMEnabled            bool               `json:"esim_enabled"`
 	ATPort                 string             `json:"at_port,omitempty"`
 	USBPath                string             `json:"usb_path,omitempty"`
 	VendorID               uint16             `json:"vendor_id,omitempty"`
@@ -420,6 +424,7 @@ type deviceMgmtListItem struct {
 	ATPort                 string              `json:"at_port,omitempty"`
 	DeviceBackend          string              `json:"device_backend,omitempty"`
 	ESIMTransport          string              `json:"esim_transport,omitempty"`
+	ESIMEnabled            bool                `json:"esim_enabled"`
 	SMSEnabled             bool                `json:"sms_enabled"`
 	NetworkEnabled         bool                `json:"network_enabled"`
 	VoWiFiEnabled          bool                `json:"vowifi_enabled"`
@@ -592,6 +597,7 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 		Interface:              cfg.Interface,
 		ControlDevice:          cfg.ControlDevice,
 		ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
+		ESIMEnabled:            cfg.ESIMEnabled,
 		ATPort:                 w.ResolvedATPort(),
 		USBPath:                cfg.USBPath,
 		VendorID:               vendorID,
@@ -737,6 +743,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			ATPort:                 w.ResolvedATPort(),
 			DeviceBackend:          cfg.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
+			ESIMEnabled:            cfg.ESIMEnabled,
 			SMSEnabled:             cfg.SMSEnabled,
 			NetworkEnabled:         cfg.NetworkEnabled,
 			VoWiFiEnabled:          s.pool.IsVoWiFiActive(w.ID), // 使用多设备状态查询
@@ -781,6 +788,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			ATPort:                 dc.ATPort,
 			DeviceBackend:          dc.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(dc.ESIMTransport),
+			ESIMEnabled:            dc.ESIMEnabled,
 			SMSEnabled:             true, // SMS 恒开（系统不变量）
 			NetworkEnabled:         dc.NetworkEnabled,
 			VoWiFiEnabled:          false, // 非运行设备无活跃 VoWiFi
@@ -881,6 +889,7 @@ func (s *Server) handleDeviceMgmtOverviewLite(c *gin.Context) {
 				Interface:              dc.Interface,
 				ControlDevice:          dc.ControlDevice,
 				ESIMTransport:          config.NormalizeESIMTransport(dc.ESIMTransport),
+				ESIMEnabled:            dc.ESIMEnabled,
 				ATPort:                 dc.ATPort,
 				USBPath:                dc.USBPath,
 				SMSEnabled:             pol.SMSEnabled,
@@ -945,6 +954,7 @@ func (s *Server) handleDeviceMgmtOverviewLite(c *gin.Context) {
 			Interface:              dc.Interface,
 			ControlDevice:          dc.ControlDevice,
 			ESIMTransport:          config.NormalizeESIMTransport(dc.ESIMTransport),
+			ESIMEnabled:            dc.ESIMEnabled,
 			ATPort:                 dc.ATPort,
 			SMSEnabled:             true, // SMS 恒开（系统不变量）
 			NetworkEnabled:         dc.NetworkEnabled,
@@ -1681,12 +1691,28 @@ func (s *Server) handleDeviceMgmtSetUSBNetMode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "指令已发送，设备正在重启..."})
 }
 
-// handleEsimListProfiles 获取 eSIM Profile 列表
-func (s *Server) handleEsimListProfiles(c *gin.Context) {
-	id := deviceIDParam(c)
+func (s *Server) esimWorkerForRequest(c *gin.Context, id, reason string) (*device.Worker, bool) {
+	if s.pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "设备池未就绪"})
+		return nil, false
+	}
+	if err := s.pool.EnsureESIMRuntime(id, reason); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "eSIM APDU 通道恢复失败: " + err.Error()})
+		return nil, false
+	}
 	worker := s.pool.GetWorker(id)
 	if worker == nil || worker.EsimMgr == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+		return nil, false
+	}
+	return worker, true
+}
+
+// handleEsimListProfiles 获取 eSIM Profile 列表
+func (s *Server) handleEsimListProfiles(c *gin.Context) {
+	id := deviceIDParam(c)
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_list_profiles")
+	if !ok {
 		return
 	}
 
@@ -1873,9 +1899,8 @@ func esimNotificationHTTPStatus(err error) int {
 
 func (s *Server) handleEsimListNotifications(c *gin.Context) {
 	id := deviceIDParam(c)
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_list_notifications")
+	if !ok {
 		return
 	}
 	items, err := esimNotificationListExec(worker.EsimMgr.ListNotifications, strings.TrimSpace(c.Query("aid_hex")))
@@ -1892,9 +1917,8 @@ func (s *Server) handleEsimListNotifications(c *gin.Context) {
 
 func (s *Server) handleEsimRetryNotification(c *gin.Context) {
 	id := deviceIDParam(c)
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_retry_notification")
+	if !ok {
 		return
 	}
 	sequence, err := strconv.ParseInt(strings.TrimSpace(c.Param("sequence")), 10, 64)
@@ -1923,9 +1947,8 @@ func (s *Server) handleEsimSwitchProfile(c *gin.Context) {
 		return
 	}
 
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_switch_preflight")
+	if !ok {
 		return
 	}
 
@@ -1963,9 +1986,8 @@ func (s *Server) handleEsimSwitchProfile(c *gin.Context) {
 // handleEsimGetEID 获取所有 eUICC 的 EID 列表
 func (s *Server) handleEsimGetEID(c *gin.Context) {
 	id := deviceIDParam(c)
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_get_eids")
+	if !ok {
 		return
 	}
 
@@ -1984,9 +2006,8 @@ func (s *Server) handleEsimGetEID(c *gin.Context) {
 // handleEsimGetChipInfo 获取 eUICC 芯片硬件信息（名称、序列号、固件版本、可用空间）
 func (s *Server) handleEsimGetChipInfo(c *gin.Context) {
 	id := deviceIDParam(c)
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_get_chip_info")
+	if !ok {
 		return
 	}
 
@@ -2006,9 +2027,8 @@ func (s *Server) handleEsimGetChipInfo(c *gin.Context) {
 // handleEsimGetOverview 获取 eSIM 总览（合并芯片信息和 profiles）
 func (s *Server) handleEsimGetOverview(c *gin.Context) {
 	id := deviceIDParam(c)
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_get_overview")
+	if !ok {
 		return
 	}
 
@@ -2058,9 +2078,8 @@ func (s *Server) handleEsimGetOverview(c *gin.Context) {
 //	{"step":"error","msg":"<错误信息>","pct":-1}
 func (s *Server) handleEsimDownloadProfile(c *gin.Context) {
 	id := deviceIDParam(c)
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_download_profile")
+	if !ok {
 		return
 	}
 
@@ -2117,9 +2136,8 @@ func (s *Server) handleEsimDownloadProfile(c *gin.Context) {
 func (s *Server) handleEsimRenameProfile(c *gin.Context) {
 	id := deviceIDParam(c)
 	iccid := c.Param("iccid")
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_rename_profile")
+	if !ok {
 		return
 	}
 
@@ -2148,9 +2166,8 @@ func (s *Server) handleEsimRenameProfile(c *gin.Context) {
 func (s *Server) handleEsimDeleteProfile(c *gin.Context) {
 	id := deviceIDParam(c)
 	iccid := c.Param("iccid")
-	worker := s.pool.GetWorker(id)
-	if worker == nil || worker.EsimMgr == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "设备或esim管理器未找到"})
+	worker, ok := s.esimWorkerForRequest(c, id, "esim_delete_profile")
+	if !ok {
 		return
 	}
 
@@ -2610,6 +2627,7 @@ func (s *Server) handleDeviceMgmtOverviewStreamSingle(c *gin.Context) {
 				Interface:              md.Interface,
 				ControlDevice:          md.ControlDevice,
 				ESIMTransport:          config.NormalizeESIMTransport(md.ESIMTransport),
+				ESIMEnabled:            md.ESIMEnabled,
 				ATPort:                 md.ATPort,
 				AudioDevice:            md.AudioDevice,
 				SMSEnabled:             pol.SMSEnabled,

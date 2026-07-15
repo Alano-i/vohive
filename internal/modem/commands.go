@@ -665,7 +665,11 @@ func (m *Manager) QueryNativeMCCMNC() (mcc string, mnc string, err error) {
 func (m *Manager) queryNativeMCCMNCFromIMSI() (mcc string, mnc string, err error) {
 	imsiStr, err := m.queryIMSIFromEF()
 	if err != nil {
-		return "", "", err
+		if fallback, fallbackErr := m.QueryIMSI(); fallbackErr == nil {
+			imsiStr = fallback
+		} else {
+			return "", "", err
+		}
 	}
 
 	var adBytes []byte

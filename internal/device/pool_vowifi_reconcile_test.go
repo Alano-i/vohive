@@ -251,6 +251,43 @@ func TestDesiredVoWiFiPolicyBlockedDoesNotRetryForever(t *testing.T) {
 	}
 }
 
+func TestDesiredVoWiFiNonRetryableFailureDoesNotRetryForever(t *testing.T) {
+	p := newDesiredVoWiFiTestPool(t, "dev-1", true, "621300613046189")
+	now := time.Now().Add(-time.Minute)
+	if !p.voWiFiHost().BeginDesiredRecover("dev-1", now) {
+		t.Fatal("expected recover state setup to begin")
+	}
+	err := errors.New("ePDG DNS 解析到不可用地址: epdg.epc.mnc030.mcc621.pub.3gppnetwork.org -> 127.0.0.1")
+
+	p.markDesiredVoWiFiRecoverResult("dev-1", err)
+
+	if p.voWiFiHost().HasDesiredRecoverState("dev-1") {
+		t.Fatal("non-retryable failure should clear recover state")
+	}
+}
+
+func TestDesiredVoWiFiReconcileSkipsPreviousNonRetryableRuntimeError(t *testing.T) {
+	p := newDesiredVoWiFiTestPool(t, "dev-1", true, "621300613046189")
+	p.recordVoWiFiStartupState("dev-1", runtimehost.State{
+		DeviceID:  "dev-1",
+		Phase:     runtimehost.PhaseFailed,
+		LastError: "ePDG DNS 解析到不可用地址: epdg.epc.mnc030.mcc621.pub.3gppnetwork.org -> 127.0.0.1",
+		UpdatedAt: time.Now(),
+	})
+	commands := make(chan vowifihost.LifecycleCommand, 1)
+	p.voWiFiHost().LifecycleControllerForTest().TestRun = func(ctx context.Context, cmd vowifihost.LifecycleCommand) error {
+		commands <- cmd
+		return nil
+	}
+
+	p.reconcileDesiredVoWiFiOnce(time.Now())
+
+	assertNoRecoverCommand(t, commands)
+	if p.voWiFiHost().HasDesiredRecoverState("dev-1") {
+		t.Fatal("previous non-retryable runtime failure should not keep recover state")
+	}
+}
+
 func TestDesiredVoWiFiRecoverUsesCachedHomeMCCMNCForPolicy(t *testing.T) {
 	p := newDesiredVoWiFiTestPool(t, "dev-1", true, "460001234567890")
 	w := p.GetWorker("dev-1")

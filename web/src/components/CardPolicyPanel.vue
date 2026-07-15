@@ -96,7 +96,7 @@ const sourceLabel = computed(() => {
         <el-icon size="22"><Sim24Regular /></el-icon>
       </div>
       <div>
-        <div class="text-lg font-bold text-gray-900 dark:text-white">卡策略</div>
+        <div class="text-lg font-bold text-gray-900 dark:text-white">SIM卡设置</div>
         <div class="text-xs text-gray-500 dark:text-gray-400">网络/VoWiFi 开关跟着 SIM 卡走，切换即时生效</div>
       </div>
     </div>

@@ -231,6 +231,18 @@ func (p *Pool) prepareVoWiFiStartContext(deviceID, traceID, runtimeEPDGOverride 
 		"aka_app_preference", prepared.IMSIdentity.AKAAppPreference,
 		"applied", prepared.IMSIdentity.Applied)
 
+	startCtx.Proxy = resolveVoWiFiCountryProxy(startProfile.MCC, traceID, deviceID)
+	if startCtx.Proxy == nil {
+		if err := validateVoWiFiDirectEPDG(p.ctx, prepared.EPDGAddr); err != nil {
+			logger.Warn("VoWiFi ePDG 直连预检失败",
+				"trace_id", traceID,
+				"device", deviceID,
+				"epdg", prepared.EPDGAddr,
+				"err", err)
+			return startCtx, err
+		}
+	}
+
 	if nc := w.NetworkController(); nc != nil {
 		w.restoreNetworkAfterVoWiFi = w.Config.NetworkEnabled
 		logger.Info("VoWiFi 启用中，停止网络功能", "trace_id", traceID, "device", deviceID)
@@ -263,8 +275,6 @@ func (p *Pool) prepareVoWiFiStartContext(deviceID, traceID, runtimeEPDGOverride 
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
-
-	startCtx.Proxy = resolveVoWiFiCountryProxy(startProfile.MCC, traceID, deviceID)
 
 	startCtx.NetworkMode = modemIface.GetNetworkMode()
 	startCtx.StartupState = newVoWiFiSIMReadyStartupState(deviceID, swu.DataplaneModeUserspace, startCtx.NetworkMode, time.Now())

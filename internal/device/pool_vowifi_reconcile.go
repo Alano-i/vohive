@@ -1,6 +1,7 @@
 package device
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -81,6 +82,17 @@ func (p *Pool) shouldReconcileVoWiFiForReason(w *Worker, reason string) bool {
 
 	if !p.voWiFiHost().DesiredRecoverable(deviceID) {
 		return false
+	}
+	if st, ok := p.GetVoWiFiRuntimeState(deviceID); ok {
+		errText := strings.TrimSpace(st.LastError)
+		if errText != "" && !shouldRetryVoWiFiAutoStart(errors.New(errText)) {
+			p.clearDesiredVoWiFiRecoverState(deviceID)
+			logger.Warn("VoWiFi 目标态恢复跳过：上次错误不可重试",
+				"event", "VOWIFI_DESIRED_RECOVER_SKIPPED_NON_RETRYABLE",
+				"device", deviceID,
+				"err", errText)
+			return false
+		}
 	}
 
 	status := w.ProjectDeviceStatus()
@@ -229,6 +241,11 @@ func (p *Pool) markDesiredVoWiFiRecoverResult(deviceID string, err error) {
 	if carrier.IsVoWiFiPolicyBlockedError(err) {
 		p.clearDesiredVoWiFiRecoverState(deviceID)
 		logger.Warn("VoWiFi 目标态恢复跳过：策略禁止", "event", "VOWIFI_DESIRED_RECOVER_SKIPPED_POLICY", "device", deviceID, "err", err)
+		return
+	}
+	if !shouldRetryVoWiFiAutoStart(err) {
+		p.clearDesiredVoWiFiRecoverState(deviceID)
+		logger.Warn("VoWiFi 目标态恢复跳过：错误不可重试", "event", "VOWIFI_DESIRED_RECOVER_SKIPPED_NON_RETRYABLE", "device", deviceID, "err", err)
 		return
 	}
 	snapshot := p.voWiFiHost().MarkDesiredRecoverFailed(deviceID, time.Now(), err)

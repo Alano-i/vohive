@@ -152,6 +152,7 @@ type DeviceConfig struct {
 	QMIProxyPath       string `mapstructure:"qmi_proxy_path"`
 	QMIProxyExecutable string `mapstructure:"qmi_proxy_executable"`
 	ESIMTransport      string `mapstructure:"esim_transport"` // eSIM 传输通道: at|qmi|mbim，默认 at
+	ESIMEnabled        bool   `mapstructure:"esim_enabled"`   // 设备是否固定支持 eSIM/eUICC；用于避免运行时扫描失败时隐藏 eSIM 功能
 	DeviceBackend      string `mapstructure:"device_backend"` // 设备后端模式: at|qmi|mbim|auto，默认 at
 	USBNetMode         *int   `mapstructure:"usbnet_mode"`    // 可选：用于校验/设置 Quectel USBNET 模式
 	// ESIMSwitch controls deterministic eSIM switch behavior. Zero values preserve current behavior.

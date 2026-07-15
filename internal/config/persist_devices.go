@@ -181,6 +181,9 @@ func deviceConfigToNode(d DeviceConfig) *yaml.Node {
 	if d.QMIProxyExecutable != "" {
 		appendMapScalar(m, "qmi_proxy_executable", d.QMIProxyExecutable)
 	}
+	if d.ESIMEnabled {
+		appendMapBool(m, "esim_enabled", true)
+	}
 	if d.ProxyPort > 0 {
 		appendMapInt(m, "proxy_port", d.ProxyPort)
 	}

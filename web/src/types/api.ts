@@ -86,6 +86,7 @@ export type DeviceOverviewItem = {
   interface?: string
   control_device?: string
   esim_transport?: string
+  esim_enabled?: boolean
   at_port?: string
   usb_path?: string
   vendor_id?: number
@@ -126,6 +127,7 @@ export type DeviceMgmtListItem = {
   at_port?: string
   device_backend?: 'at' | 'qmi' | 'mbim'
   esim_transport?: string
+  esim_enabled?: boolean
   sms_enabled: boolean
   network_enabled: boolean
   vowifi_enabled?: boolean
@@ -142,6 +144,7 @@ export type DeviceConfigDTO = {
   apn?: string
   ip_version?: 'v4' | 'v6' | 'v4v6'
   esim_transport?: 'at' | 'qmi'
+  esim_enabled?: boolean
   network_enabled?: boolean
   at_port: string
   control_device: string

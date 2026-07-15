@@ -96,7 +96,18 @@ func (m *Manager) enableRuntime(ctx context.Context, req runtimeEnableRequest) (
 
 	preparedStart, err := m.PrepareStart(deviceID, traceID, req.OverrideEPDG)
 	if err != nil {
-		return err
+		startFinalized = true
+		state := failedPrepareStartState(deviceID, err)
+		m.FailStart(deviceID, startupEpoch, state, err)
+		return adapter.HandleStartupError(StartupErrorRequest{
+			TraceID:             traceID,
+			DeviceID:            deviceID,
+			RuntimeEPDGOverride: strings.TrimSpace(req.OverrideEPDG),
+			Generation:          req.Generation,
+			StartedAt:           startedAt,
+			State:               state,
+			Err:                 err,
+		})
 	}
 	generation := m.ensureLifecycleGeneration(deviceID, req.Generation, req.Reason)
 	modemIface := preparedStart.Modem
@@ -159,6 +170,26 @@ func (m *Manager) enableRuntime(ctx context.Context, req runtimeEnableRequest) (
 	logger.Info("VoWiFi 已启用、短信模式已切换为 VoWiFi", "trace_id", traceID, "device", deviceID, "active_count", activeCount)
 	logger.Debug("EnableVoWiFi 结束（成功）", "trace_id", traceID, "device", deviceID, "cost_ms", time.Since(startedAt).Milliseconds())
 	return nil
+}
+
+func failedPrepareStartState(deviceID string, err error) runtimehost.State {
+	state := failedRuntimeState(deviceID, runtimehost.State{DeviceID: strings.TrimSpace(deviceID)}, nil, err)
+	errText := ""
+	if err != nil {
+		errText = strings.ToLower(err.Error())
+	}
+	switch {
+	case strings.Contains(errText, "epdg"):
+		state.LastErrorClass = "epdg"
+		state.LastReason = "epdg_preflight_failed"
+	case strings.Contains(errText, "proxy"):
+		state.LastErrorClass = "proxy"
+		state.LastReason = "proxy_preflight_failed"
+	case strings.Contains(errText, "imsi") || strings.Contains(errText, "plmn"):
+		state.LastErrorClass = "identity"
+		state.LastReason = "identity_preflight_failed"
+	}
+	return state
 }
 
 func (m *Manager) disableRuntime(ctx context.Context, reasonDeviceID, reason string, restoreRadio, skipInvalidate bool) error {
