@@ -120,6 +120,71 @@ func TestClientProxyAllocateClientIDAfterOpen(t *testing.T) {
 	}
 }
 
+func TestClientIgnoresMismatchedCTLResponseForReusedTransactionID(t *testing.T) {
+	const devicePath = "/dev/cdc-wdm-stale-ctl"
+	const clientID = 0x31
+
+	errCh := withProxyTransportForTest(t, func(conn net.Conn) error {
+		defer conn.Close()
+
+		openReq, err := readQMIFrameFromConn(conn)
+		if err != nil {
+			return err
+		}
+		if err := writeCTLSuccess(conn, openReq); err != nil {
+			return err
+		}
+
+		allocReq, err := readQMIFrameFromConn(conn)
+		if err != nil {
+			return err
+		}
+		if err := assertCTLRequest(allocReq, CTLGetClientID); err != nil {
+			return err
+		}
+
+		// Simulate a delayed SYNC response from the previous process that uses
+		// the same one-byte CTL transaction ID as this GET_CLIENT_ID request.
+		staleReq := *allocReq
+		staleReq.MessageID = CTLSync
+		if err := writeCTLSuccess(conn, &staleReq); err != nil {
+			return err
+		}
+
+		return writeCTLResponse(conn, allocReq, []TLV{
+			successTLV(),
+			{Type: 0x01, Value: []byte{ServiceDMS, clientID}},
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client, err := NewClientWithOptions(ctx, devicePath, ClientOptions{
+		UseProxy:     true,
+		SyncOnOpen:   false,
+		ReadDeadline: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewClientWithOptions() error = %v", err)
+	}
+	defer client.Close()
+
+	got, err := client.AllocateClientIDWithContext(ctx, ServiceDMS)
+	if err != nil {
+		t.Fatalf("AllocateClientIDWithContext() error = %v", err)
+	}
+	if got != clientID {
+		t.Fatalf("client ID = 0x%02x, want 0x%02x", got, clientID)
+	}
+	if stats := client.Stats(); stats.UnmatchedResponses != 1 {
+		t.Fatalf("unmatched responses = %d, want 1", stats.UnmatchedResponses)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAllocateClientIDWithContextUnsupportedServiceReturnsErrServiceNotSupported(t *testing.T) {
 	client := &Client{
 		transactions:    make(map[uint32]*transactionEntry),
@@ -197,7 +262,6 @@ func TestAllocateClientIDWithContextUnknownServiceCacheFallsThrough(t *testing.T
 		t.Fatal(err)
 	}
 }
-
 
 func TestClientFallsBackToRawWhenProxyTransportOpenFails(t *testing.T) {
 	const devicePath = "/dev/cdc-wdm-fallback0"

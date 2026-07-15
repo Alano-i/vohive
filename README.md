@@ -77,6 +77,11 @@ curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install
 - systemd 服务: `vohive.service`
 - Web 管理地址: `http://<服务器IP>:7575`
 
+对于 DJI Baiwang (`2ca3:4006`) 设备，安装器还会配置启动前 USB
+准备服务：主机每次开机时先通过专用 AT 接口重启仍由 USB 供电的模组，
+等待重新枚举并绑定 `option` + `qmi_wwan` 后再启动 VoHive，避免上一次
+进程遗留的 QMI CTL 响应导致设备在线但数据面和 SIM 身份不可用。
+
 ### 本地二进制安装
 
 如果已经手动下载或编译好了二进制文件,可以使用本地安装脚本:

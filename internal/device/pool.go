@@ -1045,10 +1045,12 @@ func (p *Pool) RemoveWorker(deviceID string) error {
 }
 
 // qmiWorkerBootstrapDeadline 是 AddWorkerFromConfig 单次执行的硬上限。
-// 内部多数探测都带有名义上的 context 超时，但一旦某一层（包括 vendored QMI 库）
-// 未正确响应取消，整条同步链路可能永久卡死，导致设备槽位既无法重试也无法删除。
-// 看门狗以此为界强制兜底释放 rebuilding 标记。
-var qmiWorkerBootstrapDeadline = 90 * time.Second
+// 多块 DJI 模组在主机启动后会并发做 USB/IMEI 归属解析，但 AT 串口探测需要
+// 串行避让；三块设备的正常冷启动可能超过 90 秒。过早释放 rebuilding 会让
+// 健康巡检启动第二个 Worker，并把仍在初始化的第一个 Worker/AT 口关闭，造成
+// ICCID 瞬时清空和 QMI Stop/Start 循环。四分钟硬上限仍能兜住真正未响应
+// context 取消的 vendored QMI 调用，同时不会误伤正常冷启动。
+var qmiWorkerBootstrapDeadline = 4 * time.Minute
 
 // beginRebuildAttemptLocked 标记设备进入新一轮启动/重建尝试，返回本次尝试的 token。
 // 调用前必须已持有 p.mu 写锁。
