@@ -425,6 +425,7 @@ type deviceMgmtListItem struct {
 	DeviceBackend          string              `json:"device_backend,omitempty"`
 	ESIMTransport          string              `json:"esim_transport,omitempty"`
 	ESIMEnabled            bool                `json:"esim_enabled"`
+	ActiveESIMProfileName  string              `json:"active_esim_profile_name,omitempty"`
 	SMSEnabled             bool                `json:"sms_enabled"`
 	NetworkEnabled         bool                `json:"network_enabled"`
 	VoWiFiEnabled          bool                `json:"vowifi_enabled"`
@@ -625,13 +626,20 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 		item.PrivateIP = nc.GetPrivateIP()
 		item.PrivateIPv6 = nc.GetPrivateIPv6()
 	}
-	if w.EsimMgr != nil {
-		if name, err := w.EsimMgr.ActiveProfileName(); err == nil {
-			item.ActiveESIMProfileName = name
-		}
-	}
+	item.ActiveESIMProfileName = activeESIMProfileName(w)
 	s.applyLifecycleToOverviewLiteItem(&item, w, cfg)
 	return item
+}
+
+func activeESIMProfileName(w *device.Worker) string {
+	if w == nil || w.EsimMgr == nil {
+		return ""
+	}
+	name, err := w.EsimMgr.ActiveProfileName()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(name)
 }
 
 type overviewStreamEmitVersion struct {
@@ -744,6 +752,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			DeviceBackend:          cfg.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
 			ESIMEnabled:            cfg.ESIMEnabled,
+			ActiveESIMProfileName:  activeESIMProfileName(w),
 			SMSEnabled:             cfg.SMSEnabled,
 			NetworkEnabled:         cfg.NetworkEnabled,
 			VoWiFiEnabled:          s.pool.IsVoWiFiActive(w.ID), // 使用多设备状态查询

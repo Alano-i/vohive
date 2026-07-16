@@ -128,6 +128,7 @@ export type DeviceMgmtListItem = {
   device_backend?: 'at' | 'qmi' | 'mbim'
   esim_transport?: string
   esim_enabled?: boolean
+  active_esim_profile_name?: string
   sms_enabled: boolean
   network_enabled: boolean
   vowifi_enabled?: boolean

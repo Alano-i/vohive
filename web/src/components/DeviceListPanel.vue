@@ -45,6 +45,14 @@ const modelSortDir = computed({
 
 const primaryStatus = primaryLifecycleStatus
 
+const deviceDisplayName = (d: DeviceMgmtListItem) => {
+  const base = String(d?.name || d?.id || '').trim()
+  const esimName = String(d?.active_esim_profile_name || '').trim()
+  if (!esimName) return base
+  if (!base) return esimName
+  return `${base} · ${esimName}`
+}
+
 const statusTagClass = (tone: ReturnType<typeof primaryLifecycleStatus>['tone']) => {
   switch (tone) {
     case 'success':
@@ -149,7 +157,7 @@ const devicePathText = (d: DeviceMgmtListItem) => {
           >
             <div class="min-w-0">
               <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0 font-bold text-gray-800 dark:text-gray-100 truncate">{{ d.name || d.id }}</div>
+                <div class="min-w-0 font-bold text-gray-800 dark:text-gray-100 truncate">{{ deviceDisplayName(d) }}</div>
                 <span
                   class="inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-xs font-medium leading-5"
                   :class="statusTagClass(primaryStatus(d).tone)"
