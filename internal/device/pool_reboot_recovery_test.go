@@ -29,6 +29,18 @@ func TestModemRebootRecoveryDefaults(t *testing.T) {
 	}
 }
 
+func TestResetWorkerForNetworkControlRecoveryUsesBackendWhenATUnavailable(t *testing.T) {
+	be := &esimSwitchRestoreBackendStub{mode: backend.BackendAT}
+	worker := &Worker{ID: "dev-reset", Backend: be}
+
+	if err := resetWorkerForNetworkControlRecovery(worker); err != nil {
+		t.Fatal(err)
+	}
+	if be.rebootCalls != 1 {
+		t.Fatalf("reboot calls=%d want=1", be.rebootCalls)
+	}
+}
+
 func TestDefaultModemRebootRecoveryStartsWithImmediateAttempt(t *testing.T) {
 	opts := defaultModemRebootRecoveryOptions("dev-qmi", "qmi_transport_failed")
 	if len(opts.delays) == 0 {

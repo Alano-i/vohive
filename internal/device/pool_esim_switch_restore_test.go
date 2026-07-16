@@ -53,6 +53,7 @@ type esimSwitchRestoreBackendStub struct {
 	openChannelStarted  chan<- struct{}
 	openChannelRelease  <-chan struct{}
 	setModeHook         func(backend.OperatingMode)
+	rebootCalls         int
 }
 
 func setPrivateFieldSwitchRestore(t *testing.T, target any, fieldName string, value any) {
@@ -224,7 +225,10 @@ func (s *esimSwitchRestoreBackendStub) SetOperatingMode(ctx context.Context, mod
 func (s *esimSwitchRestoreBackendStub) GetOperatingMode(ctx context.Context) (backend.OperatingMode, error) {
 	return s.getMode, nil
 }
-func (s *esimSwitchRestoreBackendStub) Reboot(ctx context.Context) error { return nil }
+func (s *esimSwitchRestoreBackendStub) Reboot(ctx context.Context) error {
+	s.rebootCalls++
+	return nil
+}
 func (s *esimSwitchRestoreBackendStub) OpenLogicalChannel(ctx context.Context, aid string) (int, error) {
 	s.openChannelAIDs = append(s.openChannelAIDs, aid)
 	if s.openChannelStarted != nil {
@@ -943,6 +947,48 @@ func TestSIMIdentityGenerationSeparatesRepeatedSwitchesToSameTarget(t *testing.T
 	if !w.SIMIdentityConvergenceMatches("target-iccid", second) {
 		t.Fatal("current generation should match the active switch target")
 	}
+}
+
+func TestSchedulePostSwitchIdentityRefreshesLoadsOperatorMetadataForReadyIdentity(t *testing.T) {
+	withFastPostSwitchIdentityPolling(t)
+	withImmediatePostSwitchIdentityRetries(t)
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	be := &esimSwitchRestoreBackendStub{
+		mode:      backend.BackendQMI,
+		liveICCID: "target-iccid",
+		liveIMSI:  "target-imsi",
+		liveSPN:   "ClubSim",
+		simMetadata: &backend.SIMMetadata{
+			NativeMCC: "454",
+			NativeMNC: "00",
+		},
+	}
+	w := &Worker{ID: "dev-1", Config: config.DeviceConfig{ID: "dev-1"}, Backend: be}
+	w.cacheMu.Lock()
+	w.state.Identity.Generation = 7
+	w.state.Identity.Phase = simIdentityPhaseReady
+	w.state.Identity.Ready = true
+	w.state.Identity.ICCID = "target-iccid"
+	w.state.Identity.IMSI = "target-imsi"
+	w.cacheMu.Unlock()
+	p.workers["dev-1"] = w
+
+	p.schedulePostSwitchIdentityRefreshes("dev-1", esimSwitchContext{
+		TargetICCID:        "target-iccid",
+		IdentityGeneration: 7,
+	})
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		status := w.ProjectDeviceStatus()
+		if status.NativeSPN == "ClubSim" && status.NativeMCC == "454" && status.NativeMNC == "00" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	status := w.ProjectDeviceStatus()
+	t.Fatalf("operator metadata not refreshed: spn=%q mcc=%q mnc=%q", status.NativeSPN, status.NativeMCC, status.NativeMNC)
 }
 
 func TestHandleESIMSwitchAfterVoWiFiUsesCurrentSwitch(t *testing.T) {

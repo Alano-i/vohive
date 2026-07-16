@@ -10,6 +10,7 @@ import EmptyState from './EmptyState.vue'
 import OperatorSelectionDialog from './OperatorSelectionDialog.vue'
 import { Settings24Regular } from '@vicons/fluent'
 import type { StatusLightTone } from './statusLight'
+import { formatNetworkMode } from '../utils/networkMode'
 
 const props = defineProps<{
   device: DeviceOverviewItem | null
@@ -149,11 +150,14 @@ const controlOnline = computed(() => isControlOnline(props.device))
 
 const isRegistered = computed(() => isRadioRegistered(props.device))
 const simMissing = computed(() => isSIMMissing(props.device))
+const airplaneEnabled = computed(() => props.device?.airplane_enabled === true)
+const cellularNetworkMode = computed(() => formatNetworkMode(props.device?.modem?.network_duplex, props.device?.modem?.network_mode))
 
 const cellularStatusTone = computed<StatusLightTone>(() => {
   if (isRecoveryPhase(props.device?.lifecycle_phase)) return 'warning'
   if (simMissing.value) return 'danger'
   if (!controlOnline.value) return 'danger'
+  if (airplaneEnabled.value) return 'warning'
   if (props.device?.registration_state_label === 'denied') return 'danger'
   return isRegistered.value ? 'success' : 'warning'
 })
@@ -183,6 +187,7 @@ const cellularStatusStyles = computed(() => {
 
 const cellularStatusText = computed(() => {
   if (simMissing.value) return '未插卡'
+  if (airplaneEnabled.value) return '飞行模式'
   const phaseText = lifecycleStatusLabel(props.device?.lifecycle_phase)
   if (phaseText && props.device?.lifecycle_phase !== 'online' && props.device?.lifecycle_phase !== 'offline') return phaseText
   if (!controlOnline.value) return props.device?.running ? '控制面恢复中' : '离线'
@@ -288,9 +293,10 @@ const networkPanelMessage = computed(() => {
           <StatusLight :tone="cellularStatusTone" size="sm" :animated="cellularStatusTone !== 'danger'" />
           <div class="flex-1 min-w-0">
             <div class="text-sm font-bold leading-tight" :class="cellularStatusStyles.text">
-              <template v-if="isRegistered">
+              <template v-if="airplaneEnabled">飞行模式</template>
+              <template v-else-if="isRegistered">
                 {{ device?.modem?.operator || '--' }}
-                <span v-if="device?.modem?.network_mode" class="opacity-70">· {{ [device?.modem?.network_duplex, device?.modem?.network_mode].filter(Boolean).join(' ') }}</span>
+                <span v-if="cellularNetworkMode" class="opacity-70">· {{ cellularNetworkMode }}</span>
               </template>
               <template v-else>
                 {{ cellularStatusText }}
@@ -337,7 +343,7 @@ const networkPanelMessage = computed(() => {
 
         <!-- 次要字段 -->
         <div class="space-y-2.5 text-xs text-gray-700 dark:text-gray-200">
-          <FieldRow label="网络模式"  :value="[device?.modem?.network_duplex, device?.modem?.network_mode].filter(Boolean).join(' ') || '--'" monospace />
+          <FieldRow label="网络模式"  :value="cellularNetworkMode || '--'" monospace />
           <FieldRow label="频段"  :value="device?.modem?.radio_band || '--'" monospace />
           <FieldRow label="信道"  :value="device?.modem?.radio_channel ? String(device.modem.radio_channel) : '--'" monospace />
           <FieldRow label="注册状态"  :value="device?.modem?.reg_status_text || '--'" monospace />

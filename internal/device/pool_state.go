@@ -261,6 +261,49 @@ func (w *Worker) SIMIdentityConvergenceMatches(targetICCID string, generation ui
 	return phase == simIdentityPhaseTransitioning || phase == simIdentityPhaseDegraded || !w.state.Identity.Ready
 }
 
+// SIMIdentityActiveMatches verifies that an asynchronous post-switch refresh
+// still belongs to the currently active SIM identity.
+func (w *Worker) SIMIdentityActiveMatches(targetICCID string, generation uint64) bool {
+	if w == nil {
+		return false
+	}
+	target := normalizeSIMIdentityForCompare(targetICCID)
+	w.cacheMu.RLock()
+	defer w.cacheMu.RUnlock()
+	if generation != 0 && w.state.Identity.Generation != generation {
+		return false
+	}
+	if w.state.Identity.Phase != simIdentityPhaseReady || !w.state.Identity.Ready {
+		return false
+	}
+	current := normalizeSIMIdentityForCompare(w.state.Identity.ICCID)
+	if target != "" {
+		return current == target
+	}
+	return current != ""
+}
+
+func (w *Worker) SIMOperatorMetadataReady(targetICCID string, generation uint64) bool {
+	if w == nil {
+		return false
+	}
+	target := normalizeSIMIdentityForCompare(targetICCID)
+	w.cacheMu.RLock()
+	defer w.cacheMu.RUnlock()
+	if generation != 0 && w.state.Identity.Generation != generation {
+		return false
+	}
+	if w.state.Identity.Phase != simIdentityPhaseReady || !w.state.Identity.Ready {
+		return false
+	}
+	if target != "" && normalizeSIMIdentityForCompare(w.state.Identity.ICCID) != target {
+		return false
+	}
+	return strings.TrimSpace(w.state.Identity.NativeSPN) != "" ||
+		(strings.TrimSpace(w.state.Identity.NativeMCC) != "" && strings.TrimSpace(w.state.Identity.NativeMNC) != "") ||
+		len(w.state.Identity.PNN) > 0
+}
+
 // backendPNNRecordsToModem 将后端的 PNN 记录列表转换为 modem 包中公开的数据结构形式
 func backendPNNRecordsToModem(records []backend.PNNRecord) []modem.PNNRecord {
 	if len(records) == 0 {

@@ -17,10 +17,12 @@ import (
 )
 
 type ussdDeviceBackendStub struct {
-	mode      string
-	imei      string
-	rebootErr error
-	rebooted  bool
+	mode          string
+	imei          string
+	rebootErr     error
+	rebooted      bool
+	setModeErr    error
+	operatingMode backend.OperatingMode
 }
 
 var _ backend.DeviceBackend = (*ussdDeviceBackendStub)(nil)
@@ -54,9 +56,16 @@ func (s *ussdDeviceBackendStub) ListSMS(ctx context.Context) ([]backend.SMSSumma
 }
 func (s *ussdDeviceBackendStub) DeleteAllSMS(ctx context.Context) error { return nil }
 func (s *ussdDeviceBackendStub) SetOperatingMode(ctx context.Context, mode backend.OperatingMode) error {
+	if s.setModeErr != nil {
+		return s.setModeErr
+	}
+	s.operatingMode = mode
 	return nil
 }
 func (s *ussdDeviceBackendStub) GetOperatingMode(ctx context.Context) (backend.OperatingMode, error) {
+	if s.operatingMode != 0 {
+		return s.operatingMode, nil
+	}
 	return backend.ModeOnline, nil
 }
 func (s *ussdDeviceBackendStub) Reboot(ctx context.Context) error {

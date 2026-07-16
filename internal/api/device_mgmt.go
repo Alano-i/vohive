@@ -374,6 +374,7 @@ type deviceMgmtOverviewLiteItem struct {
 	ActiveESIMProfileName  string             `json:"active_esim_profile_name,omitempty"`
 	SMSEnabled             bool               `json:"sms_enabled"`
 	NetworkEnabled         bool               `json:"network_enabled"`
+	AirplaneEnabled        bool               `json:"airplane_enabled"`
 	VoWiFiEnabled          bool               `json:"vowifi_enabled"`
 	VoWiFiActive           bool               `json:"vowifi_active"`
 	VoWiFiRuntime          *voWiFiRuntimeDTO  `json:"vowifi_runtime,omitempty"`
@@ -428,6 +429,7 @@ type deviceMgmtListItem struct {
 	ActiveESIMProfileName  string              `json:"active_esim_profile_name,omitempty"`
 	SMSEnabled             bool                `json:"sms_enabled"`
 	NetworkEnabled         bool                `json:"network_enabled"`
+	AirplaneEnabled        bool                `json:"airplane_enabled"`
 	VoWiFiEnabled          bool                `json:"vowifi_enabled"`
 	VoWiFiRuntime          *voWiFiRuntimeDTO   `json:"vowifi_runtime,omitempty"`
 	Modem                  deviceMgmtListModem `json:"modem"`
@@ -608,6 +610,7 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 		E911SetupAvailable:     e911.SetupAvailable(modemStatus),
 		SMSEnabled:             cfg.SMSEnabled,
 		NetworkEnabled:         cfg.NetworkEnabled,
+		AirplaneEnabled:        cfg.AirplaneEnabled,
 		VoWiFiEnabled:          cardPolicyVoWiFiEnabled(strings.TrimSpace(status.ICCID), cfg.VoWiFiEnabled),
 		VoWiFiActive:           s.pool.IsVoWiFiActive(w.ID),
 		VoWiFiRuntime:          s.getVoWiFiRuntimeDTO(w.ID),
@@ -755,6 +758,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			ActiveESIMProfileName:  activeESIMProfileName(w),
 			SMSEnabled:             cfg.SMSEnabled,
 			NetworkEnabled:         cfg.NetworkEnabled,
+			AirplaneEnabled:        cfg.AirplaneEnabled,
 			VoWiFiEnabled:          s.pool.IsVoWiFiActive(w.ID), // 使用多设备状态查询
 			VoWiFiRuntime:          s.getVoWiFiRuntimeDTO(w.ID),
 			NetworkConnected:       w.NetworkConnected(),
@@ -800,6 +804,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			ESIMEnabled:            dc.ESIMEnabled,
 			SMSEnabled:             true, // SMS 恒开（系统不变量）
 			NetworkEnabled:         dc.NetworkEnabled,
+			AirplaneEnabled:        dc.AirplaneEnabled,
 			VoWiFiEnabled:          false, // 非运行设备无活跃 VoWiFi
 			NetworkConnected:       false,
 			RegistrationStateLabel: registrationStateLabel(0),
@@ -2405,10 +2410,11 @@ func (s *Server) handleDeviceMgmtSetFlightMode(c *gin.Context) {
 	}
 
 	flightModeEnabled := req.Enabled
+	currentICCID := strings.TrimSpace(worker.CurrentICCID())
+	previousPolicy, previousPolicyErr := db.ResolveCardPolicy(currentICCID)
 
 	// 先落库卡策略（飞行模式跟卡走）：开飞行与 network/vowifi 互斥，关飞行仅清 airplane。
-	// best-effort：落库失败不阻断热切（与 network/vowifi 热切路径一致）。
-	s.patchCardPolicyForDevice(id, func(p *db.CardPolicy) {
+	_, applied, policyErr := s.patchCardPolicyForDevice(id, func(p *db.CardPolicy) {
 		if flightModeEnabled {
 			p.AirplaneEnabled = true
 			p.VoWiFiEnabled = false
@@ -2417,11 +2423,39 @@ func (s *Server) handleDeviceMgmtSetFlightMode(c *gin.Context) {
 			p.AirplaneEnabled = false
 		}
 	})
+	if policyErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": policyErr.Error()})
+		return
+	}
+	if !applied {
+		c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "设备尚未识别到 SIM 卡 ICCID，无法保存飞行模式策略"})
+		return
+	}
 	// 同步 w.Config，使概览即时反映飞行/在线模式（setWorkerFlightMode 只切硬件不碰 Config）。
 	s.pool.SetWorkerAirplanePolicy(id, flightModeEnabled)
 
 	operatingMode, flightMode, err := setWorkerFlightMode(c.Request.Context(), worker, flightModeEnabled)
 	if err != nil {
+		if isRecoverableDeviceControlError(worker, err) {
+			s.pool.MarkLifecycleRecovery(id, device.LifecyclePhaseRecovering, "flight_mode_control_recovery", 3*time.Minute)
+			s.scheduleDeviceControlRecovery(worker, "flight_mode_control_recovery")
+			acceptedMode := int(backend.ModeOnline)
+			if flightModeEnabled {
+				acceptedMode = int(backend.ModeRFOff)
+			}
+			c.JSON(http.StatusAccepted, gin.H{
+				"status":         "ok",
+				"message":        "飞行模式设置已保存，正在恢复设备控制面",
+				"operating_mode": acceptedMode,
+				"flight_mode":    flightModeEnabled,
+				"recovering":     true,
+			})
+			return
+		}
+		if previousPolicyErr == nil && currentICCID != "" {
+			_ = db.UpsertCardPolicy(previousPolicy)
+			s.pool.SetWorkerCardPolicyProjection(id, previousPolicy.NetworkEnabled, previousPolicy.VoWiFiEnabled, previousPolicy.AirplaneEnabled, previousPolicy.IPVersion, previousPolicy.APN)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "切换飞行模式失败: " + err.Error()})
 		return
 	}

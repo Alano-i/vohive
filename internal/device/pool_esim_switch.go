@@ -662,32 +662,48 @@ func (p *Pool) schedulePostSwitchIdentityRefreshes(deviceID string, snapshot esi
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
 	}
-	for _, delay := range delays {
-		delay := delay
-		pollTimeout := pollTimeout
-		pollInterval := pollInterval
-		go func() {
-			timer := time.NewTimer(delay)
-			defer timer.Stop()
+	go func() {
+		startedAt := time.Now()
+		for _, delay := range delays {
+			wait := time.Until(startedAt.Add(delay))
+			if wait < 0 {
+				wait = 0
+			}
+			timer := time.NewTimer(wait)
 			select {
 			case <-p.ctx.Done():
+				timer.Stop()
 				return
 			case <-timer.C:
 			}
 			worker := p.GetWorker(deviceID)
-			if worker == nil || worker.Backend == nil || !worker.SIMIdentityConvergenceMatches(snapshot.TargetICCID, snapshot.IdentityGeneration) {
+			if worker == nil || worker.Backend == nil {
 				return
 			}
-			_, err := p.refreshPostSwitchIdentityWithPolling(deviceID, worker, snapshot, pollTimeout, pollInterval)
-			if err != nil {
-				logger.Debug("切卡后补刷新 SIM 身份失败", "device", deviceID, "delay", delay.String(), "err", err)
+			if worker.SIMIdentityConvergenceMatches(snapshot.TargetICCID, snapshot.IdentityGeneration) {
+				if _, err := p.refreshPostSwitchIdentityWithPolling(deviceID, worker, snapshot, pollTimeout, pollInterval); err != nil {
+					logger.Debug("切卡后补刷新 SIM 身份失败", "device", deviceID, "delay", delay.String(), "err", err)
+					continue
+				}
+			}
+			if !worker.SIMIdentityActiveMatches(snapshot.TargetICCID, snapshot.IdentityGeneration) {
 				return
+			}
+			if worker.SIMOperatorMetadataReady(snapshot.TargetICCID, snapshot.IdentityGeneration) {
+				return
+			}
+			if err := worker.RefreshIdentityLive(nil, "post_switch_operator_metadata"); err != nil {
+				logger.Debug("切卡后补刷新原运营商失败", "device", deviceID, "delay", delay.String(), "err", err)
+				continue
 			}
 			p.PersistIdentityState(worker)
 			p.broadcastVoWiFiStateChange(deviceID)
-			logger.Debug("切卡后补刷新 SIM 身份完成", "device", deviceID, "delay", delay.String())
-		}()
-	}
+			if worker.SIMOperatorMetadataReady(snapshot.TargetICCID, snapshot.IdentityGeneration) {
+				logger.Info("切卡后原运营商信息刷新完成", "device", deviceID, "delay", delay.String())
+				return
+			}
+		}
+	}()
 }
 
 type postSwitchSIMAuthProbeResult struct {
@@ -914,6 +930,11 @@ func (p *Pool) restoreRadioDataForSwitchSnapshot(deviceID string, worker *Worker
 
 	if err := p.applyNetworkPreferenceForSwitchSnapshot(worker, snapshot); err != nil {
 		logger.Warn("切卡后按快照恢复网络失败", "device", deviceID, "reason", reason, "err", err)
+		if (snapshot.QMIConnectedBefore || snapshot.NetworkEnabledBefore) && isPostSwitchQMIStallError(err) {
+			p.MarkLifecycleRecovery(deviceID, LifecyclePhaseQMIStarting, "post_switch_network_qmi_recovery", 3*time.Minute)
+			p.ScheduleNetworkControlRecovery(worker, "network_enable_qmi_recovery")
+			logger.Warn("切卡后 QMI 数据面未恢复，已升级为 Worker 重建", "device", deviceID, "reason", reason)
+		}
 	}
 	if nc := worker.NetworkController(); nc != nil && nc.IsConnected() {
 		p.refreshIPs(worker, true)

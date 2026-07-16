@@ -94,6 +94,7 @@ type Server struct {
 	// networkRecovery is overridden by focused API tests. Production uses
 	// beginNetworkControlRecovery's modem reboot and rescan path.
 	networkRecovery func(context.Context, *device.Worker) error
+	controlRecovery func(*device.Worker, string)
 
 	// vowifiEnableRequest is overridden by focused API tests. Production queues
 	// the desired-state startup through Pool.RequestEnableVoWiFi.
@@ -453,6 +454,7 @@ func (s *Server) handleListDevices(c *gin.Context) {
 		NetworkMode      string            `json:"network_mode"`
 		NetworkDuplex    string            `json:"network_duplex"`
 		SIMInserted      bool              `json:"sim_inserted"`
+		AirplaneEnabled  bool              `json:"airplane_enabled"`
 		VoWiFiActive     bool              `json:"vowifi_active"`
 		VoWiFiRuntime    *voWiFiRuntimeDTO `json:"vowifi_runtime,omitempty"`
 		Traffic          map[string]string `json:"traffic,omitempty"`
@@ -464,7 +466,7 @@ func (s *Server) handleListDevices(c *gin.Context) {
 		status := w.GetCachedDeviceStatus() // 仓表盘列表读缓存，0 IPC
 		cfg := w.Config
 		if v, ok := cfgByID[w.ID]; ok {
-			cfg = v
+			cfg = overviewDisplayConfig(w.Config, v, true)
 		}
 		item := DeviceStatus{
 			ID:               cfg.ID,
@@ -479,6 +481,7 @@ func (s *Server) handleListDevices(c *gin.Context) {
 			NetworkMode:      status.NetworkMode,
 			NetworkDuplex:    status.NetworkDuplex,
 			SIMInserted:      status.SimInserted,
+			AirplaneEnabled:  cfg.AirplaneEnabled,
 			VoWiFiActive:     s.pool.IsVoWiFiActive(w.ID), // 逐个设备判断 VoWiFi 状态，支持多设备
 			VoWiFiRuntime:    s.getVoWiFiRuntimeDTO(w.ID),
 			NetworkConnected: w.NetworkConnected(),

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import EmptyState from './EmptyState.vue'
 import type { DeviceMgmtListItem } from '../types/api'
 import { isControlOnline, isRadioRegistered, isSIMMissing, lifecycleStatusLabel, primaryLifecycleStatus } from '../utils/deviceLifecycle'
+import { formatNetworkMode } from '../utils/networkMode'
 
 const props = defineProps<{
   query: string
@@ -67,7 +68,7 @@ const statusTagClass = (tone: ReturnType<typeof primaryLifecycleStatus>['tone'])
 const registrationText = (d: DeviceMgmtListItem) => {
 	if (isSIMMissing(d)) return '未插卡'
 	if (isRadioRegistered(d)) {
-		const network = [d?.modem?.network_duplex, d?.modem?.network_mode].filter(Boolean).join(' ') || '--'
+		const network = formatNetworkMode(d?.modem?.network_duplex, d?.modem?.network_mode) || '--'
 		const publicIP = String(d?.public_ip || '').trim()
 		return [d?.modem?.operator || '--', network, publicIP].filter(Boolean).join(' · ')
 	}
@@ -90,6 +91,7 @@ const dataNetworkText = (d: DeviceMgmtListItem) => {
 const secondaryStatus = (d: DeviceMgmtListItem) => {
   if (isSIMMissing(d)) return '未插卡'
   if (d?.vowifi_enabled) return vowifiStatusText(d)
+  if (d?.airplane_enabled) return '飞行模式'
   return [registrationText(d), dataNetworkText(d)].filter(Boolean).join(' · ')
 }
 

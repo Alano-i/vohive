@@ -154,6 +154,37 @@ func isRecoverableQMINetworkStartError(worker *device.Worker, err error) bool {
 		"qmi 服务未就绪",
 		"transaction timed out",
 		"qmi control not ready",
+		"context deadline exceeded",
+		"timeout",
+		"error=0x001a",
+		"no effect",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRecoverableDeviceControlError(worker *device.Worker, err error) bool {
+	if err == nil {
+		return false
+	}
+	if isRecoverableQMINetworkStartError(worker, err) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	for _, fragment := range []string{
+		"at 管理器未启动",
+		"at manager not started",
+		"port has been closed",
+		"port closed",
+		"serial port",
+		"no such file",
+		"device disconnected",
+		"设备未连接",
+		"context deadline exceeded",
+		"timeout",
 	} {
 		if strings.Contains(message, fragment) {
 			return true
@@ -170,10 +201,25 @@ func (s *Server) beginNetworkControlRecovery(ctx context.Context, worker *device
 		return fmt.Errorf("设备未找到")
 	}
 	// Bootstrap already owns the single QMI start/retry loop. Starting a second
-	// recovery or issuing CFUN here can cross old/new QMI transactions and also
-	// unnecessarily tear down a radio that is already registered.
+	// QMI StartCore call here would cross old/new transactions. Escalate through
+	// the existing deduplicated worker rebuild path instead, which closes the
+	// stale core before rediscovery and reapplies the saved network preference.
 	s.pool.MarkLifecycleRecovery(worker.ID, device.LifecyclePhaseQMIStarting, "network_enable_wait_qmi", 3*time.Minute)
+	s.scheduleDeviceControlRecovery(worker, "network_enable_qmi_recovery")
 	return nil
+}
+
+func (s *Server) scheduleDeviceControlRecovery(worker *device.Worker, reason string) {
+	if worker == nil || s.pool == nil {
+		return
+	}
+	if s.controlRecovery != nil {
+		s.controlRecovery(worker, reason)
+		return
+	}
+	if s.pool.GetWorker(worker.ID) == worker {
+		s.pool.ScheduleNetworkControlRecovery(worker, reason)
+	}
 }
 
 func (s *Server) handleDeviceVoWiFiPatch(c *gin.Context) {

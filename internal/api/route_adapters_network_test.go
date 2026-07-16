@@ -197,3 +197,11 @@ func TestRecoverableQMINetworkStartErrorDoesNotMatchATBackend(t *testing.T) {
 		t.Fatal("AT backend error must not enter QMI modem recovery")
 	}
 }
+
+func TestRecoverableQMINetworkStartErrorMatchesStaleDataSession(t *testing.T) {
+	worker := &device.Worker{Backend: &ussdDeviceBackendStub{mode: backend.BackendQMI}}
+	err := errors.New("start network failed: QMI error: service=0x01 msg=0x0020 result=0x0001 error=0x001a")
+	if !isRecoverableQMINetworkStartError(worker, err) {
+		t.Fatal("QMI no-effect/stale data session must enter modem recovery")
+	}
+}

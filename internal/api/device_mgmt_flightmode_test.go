@@ -2,10 +2,16 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+	"github.com/iniwex5/vohive/internal/backend"
 	"github.com/iniwex5/vohive/internal/config"
+	"github.com/iniwex5/vohive/internal/db"
 	"github.com/iniwex5/vohive/internal/device"
 	"github.com/iniwex5/vohive/internal/modem"
 )
@@ -26,6 +32,50 @@ func TestFlightModeSuccessMessageUsesRequestedState(t *testing.T) {
 				t.Fatalf("flightModeSuccessMessage(%v)=%q want %q", tt.enabled, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFlightModeControlFailureKeepsSavedIntentAndStartsRecovery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	openTestDB(t)
+
+	iccid := "8986000000000000999"
+	pool := device.NewPool(&config.Config{})
+	worker := &device.Worker{
+		ID:      "esim-flight-test",
+		Config:  config.DeviceConfig{ID: "esim-flight-test", DeviceBackend: backend.BackendAT},
+		Backend: &ussdDeviceBackendStub{mode: backend.BackendAT, setModeErr: errors.New("Port has been closed")},
+	}
+	setNestedPrivateField(t, worker, []string{"state", "Identity", "ICCID"}, iccid)
+	injectWorker(pool, worker)
+
+	recoveryCalled := false
+	server := &Server{pool: pool, controlRecovery: func(got *device.Worker, reason string) {
+		recoveryCalled = got == worker && reason == "flight_mode_control_recovery"
+	}}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "device_id", Value: worker.ID}}
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/devices/esim-flight-test/flight-mode", strings.NewReader(`{"enabled":true}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	server.handleDeviceMgmtSetFlightMode(ctx)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status=%d want=%d body=%s", recorder.Code, http.StatusAccepted, recorder.Body.String())
+	}
+	if !recoveryCalled {
+		t.Fatal("control recovery was not scheduled")
+	}
+	policy, err := db.ResolveCardPolicy(iccid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.AirplaneEnabled || policy.NetworkEnabled || policy.VoWiFiEnabled {
+		t.Fatalf("flight intent was not preserved: %+v", policy)
+	}
+	if !worker.Config.AirplaneEnabled || worker.Config.NetworkEnabled || worker.Config.VoWiFiEnabled {
+		t.Fatalf("worker projection was not preserved: %+v", worker.Config)
 	}
 }
 

@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { DashboardDevice } from '../types/api'
 import StatusLight from './StatusLight.vue'
+import { formatNetworkMode } from '../utils/networkMode'
 import {
   Cellular3G24Regular,
   Cellular4G24Regular,
@@ -19,17 +20,16 @@ const emit = defineEmits<{
 
 const simMissing = computed(() => props.device.sim_inserted === false)
 const deviceOnline = computed(() => props.device.healthy && !simMissing.value)
+const airplaneEnabled = computed(() => props.device.airplane_enabled === true)
 
 const displayNetworkMode = computed(() => {
   if (simMissing.value) return ''
-  const mode = String(props.device?.network_mode || '').trim()
-  const duplex = String(props.device?.network_duplex || '').trim()
-  if (!mode) return ''
-  return duplex ? `${duplex} ${mode}` : mode
+  return formatNetworkMode(props.device?.network_duplex, props.device?.network_mode)
 })
 
 const networkIcon = computed(() => {
   if (simMissing.value) return CellularData124Regular
+  if (airplaneEnabled.value) return CellularData124Regular
   // VoWiFi 模式显示 Wi-Fi 图标
   if (props.device?.vowifi_active) return Wifi124Regular
   const mode = displayNetworkMode.value
@@ -43,6 +43,7 @@ const networkIcon = computed(() => {
 
 const networkColor = computed(() => {
   if (simMissing.value) return 'text-gray-400'
+  if (airplaneEnabled.value) return 'text-amber-500'
   // VoWiFi 模式显示特殊颜色
   if (props.device?.vowifi_active) return 'text-emerald-500'
   const mode = displayNetworkMode.value
@@ -55,15 +56,11 @@ const networkColor = computed(() => {
 })
 
 const networkModeText = computed(() => {
-  const mode = displayNetworkMode.value
-  if (!mode) return ''
-  const parts = String(mode).trim().split(/\s+/).filter(Boolean)
-  if (parts.length <= 1) return parts[0] || ''
-  return parts[1] || ''
+  return displayNetworkMode.value
 })
 
 const hideNetworkModeOnNarrow = computed(() => {
-  return networkModeText.value.toUpperCase() === 'LTE'
+  return networkModeText.value.toUpperCase() === '4G LTE'
 })
 
 const publicIPText = computed(() => {
@@ -127,7 +124,7 @@ function getSignalBars(dbm: number | null | undefined) {
                 <component :is="networkIcon" />
               </el-icon>
               <span
-                v-if="!device.vowifi_active && device.network_mode && networkModeText"
+                v-if="!device.vowifi_active && !airplaneEnabled && device.network_mode && networkModeText"
                 class="text-[11px] font-bold tracking-tighter leading-none"
                 :class="hideNetworkModeOnNarrow ? 'hidden xl:inline' : ''"
               >
@@ -135,10 +132,10 @@ function getSignalBars(dbm: number | null | undefined) {
               </span>
             </div>
             <span class="flex-1 min-w-0 text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap truncate">
-              {{ simMissing ? '未插卡' : (device.vowifi_active ? 'Wi-Fi Calling' : (device.operator || '检测中...')) }}
+              {{ simMissing ? '未插卡' : (device.vowifi_active ? 'Wi-Fi Calling' : (airplaneEnabled ? '飞行模式' : (device.operator || '检测中...'))) }}
             </span>
           </div>
-          <div v-if="!device.vowifi_active && !simMissing" class="flex items-center gap-1" title="信号强度">
+          <div v-if="!device.vowifi_active && !airplaneEnabled && !simMissing" class="flex items-center gap-1" title="信号强度">
             <div class="flex items-end gap-[2px] h-3">
               <div
                 v-for="i in 4"

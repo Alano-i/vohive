@@ -1,6 +1,7 @@
 package device
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -366,6 +367,49 @@ func (p *Pool) ScheduleModemRebootRecovery(deviceID string, reason string) {
 	go p.runModemRebootRecovery(opts)
 }
 
+// ScheduleNetworkControlRecovery resets the modem through the auxiliary AT
+// path before rebuilding the worker. A worker-only rebuild cannot recover a
+// cdc-wdm/QMI control plane that remains wedged across reopen attempts.
+func (p *Pool) ScheduleNetworkControlRecovery(worker *Worker, reason string) {
+	if p == nil || worker == nil || strings.TrimSpace(worker.ID) == "" {
+		return
+	}
+	if !p.beginModemRebootRecovery(worker.ID) {
+		logger.Debug("网络控制面恢复已在运行，跳过重复复位", "device", worker.ID, "reason", reason)
+		return
+	}
+	opts := defaultModemRebootRecoveryOptions(worker.ID, reason)
+	opts.delays = manualRebootRecoveryDelays()
+	go func() {
+		if err := resetWorkerForNetworkControlRecovery(worker); err != nil {
+			logger.Warn("网络控制面恢复发送模组复位失败，继续尝试重新接管", "device", worker.ID, "reason", reason, "err", err)
+		}
+		p.runModemRebootRecoveryWithClaim(opts, true)
+	}()
+}
+
+func resetWorkerForNetworkControlRecovery(worker *Worker) error {
+	if worker == nil {
+		return fmt.Errorf("worker 不存在")
+	}
+	if worker.Modem != nil && worker.Modem.HasATPort() && worker.Modem.CanExecuteAT() {
+		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", 20*time.Second)
+		if err == nil {
+			return nil
+		}
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "timeout") || strings.Contains(message, "eof") || strings.Contains(message, "closed") || strings.Contains(message, "no such file") {
+			return nil
+		}
+	}
+	if worker.Backend == nil {
+		return fmt.Errorf("无可用模组复位通道")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return worker.Backend.Reboot(ctx)
+}
+
 func (p *Pool) scheduleWorkerRecoveryWithTransportEvent(deviceID string, reason string, event *TransportRecoveryEvent) bool {
 	deviceID = strings.TrimSpace(deviceID)
 	reason = strings.TrimSpace(reason)
@@ -458,10 +502,14 @@ func (p *Pool) scheduleATDisconnectRecovery(deviceID string, reason string) {
 }
 
 func (p *Pool) runModemRebootRecovery(opts modemRebootRecoveryOptions) {
+	p.runModemRebootRecoveryWithClaim(opts, false)
+}
+
+func (p *Pool) runModemRebootRecoveryWithClaim(opts modemRebootRecoveryOptions, preclaimed bool) {
 	if p == nil || opts.deviceID == "" {
 		return
 	}
-	if !p.beginModemRebootRecovery(opts.deviceID) {
+	if !preclaimed && !p.beginModemRebootRecovery(opts.deviceID) {
 		if opts.transportEventObserved && p.transportRecovery != nil {
 			p.transportRecovery.Finish(opts.deviceID)
 		}

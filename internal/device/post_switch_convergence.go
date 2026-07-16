@@ -114,6 +114,8 @@ func isPostSwitchQMIStallError(err error) bool {
 		"context deadline exceeded",
 		"timeout",
 		"timed out",
+		"manager core not started",
+		"qmi core not started",
 		"qmi 服务未就绪",
 		"service not ready",
 		"service unavailable",
