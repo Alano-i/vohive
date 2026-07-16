@@ -1,6 +1,9 @@
 package updater
 
 import (
+	"crypto"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,6 +35,7 @@ type Release struct {
 type Asset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	Digest             string `json:"digest"`
 }
 
 type UpdateInfo struct {
@@ -112,6 +116,33 @@ func findReleaseAsset(release *Release, goos, arch string) (Asset, error) {
 	return Asset{}, fmt.Errorf("no matching asset found for platform %s/%s, want %s", goos, arch, name)
 }
 
+func verifiedUpdateOptions(asset Asset) (selfupdate.Options, error) {
+	if asset.Digest == "" {
+		return selfupdate.Options{}, fmt.Errorf("release asset %q has no digest", asset.Name)
+	}
+
+	algorithm, encoded, ok := strings.Cut(asset.Digest, ":")
+	if !ok {
+		return selfupdate.Options{}, fmt.Errorf("release asset %q has invalid digest format", asset.Name)
+	}
+	if algorithm != "sha256" {
+		return selfupdate.Options{}, fmt.Errorf("release asset %q uses unsupported digest algorithm %q", asset.Name, algorithm)
+	}
+
+	checksum, err := hex.DecodeString(encoded)
+	if err != nil {
+		return selfupdate.Options{}, fmt.Errorf("release asset %q has invalid SHA-256 digest: %w", asset.Name, err)
+	}
+	if len(checksum) != sha256.Size {
+		return selfupdate.Options{}, fmt.Errorf("release asset %q has invalid SHA-256 digest length: got %d bytes", asset.Name, len(checksum))
+	}
+
+	return selfupdate.Options{
+		Checksum: checksum,
+		Hash:     crypto.SHA256,
+	}, nil
+}
+
 // CheckUpdate 检查是否有新版本
 func CheckUpdate() (*UpdateInfo, error) {
 	release, err := fetchLatestRelease()
@@ -125,6 +156,9 @@ func CheckUpdate() (*UpdateInfo, error) {
 	asset, err := findReleaseAsset(release, targetGoos, targetArch)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := verifiedUpdateOptions(asset); err != nil {
+		return nil, fmt.Errorf("release asset cannot be verified: %w", err)
 	}
 
 	// 使用 semver 比较版本
@@ -169,8 +203,12 @@ func ApplyUpdate() error {
 	if err != nil {
 		return err
 	}
+	updateOptions, err := verifiedUpdateOptions(asset)
+	if err != nil {
+		return fmt.Errorf("refusing unverified update: %w", err)
+	}
 
-	logger.Info("开始下载更新", "asset", asset.Name, "url", asset.BrowserDownloadURL)
+	logger.Info("开始下载更新", "asset", asset.Name, "url", asset.BrowserDownloadURL, "digest", asset.Digest)
 
 	// 下载二进制
 	client := &http.Client{Timeout: 5 * time.Minute}
@@ -185,7 +223,7 @@ func ApplyUpdate() error {
 	}
 
 	// 执行替换
-	err = selfupdate.Apply(dlResp.Body, selfupdate.Options{})
+	err = selfupdate.Apply(dlResp.Body, updateOptions)
 	if err != nil {
 		// 回滚
 		if rerr := selfupdate.RollbackError(err); rerr != nil {
