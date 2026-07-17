@@ -73,7 +73,7 @@ install_bootstrap_packages() {
 	if command -v apt-get >/dev/null 2>&1; then
 		apt-get update
 		DEBIAN_FRONTEND=noninteractive apt-get install -y \
-			ca-certificates curl tzdata kmod udev usbutils
+			ca-certificates curl tzdata
 	fi
 }
 

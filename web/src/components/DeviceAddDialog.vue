@@ -40,11 +40,7 @@ function isATOnlyDiscovery(d: DiscoveredDevice | null | undefined): boolean {
 
 function discoveryDeviceTitle(d: DiscoveredDevice | null | undefined): string {
   if (!d) return '--'
-  if (d.vendor_id === 0x2ca3 && d.product_id === 0x4006) return 'DJI Baiwang'
-  const iface = d.net_interface || ''
-  const driver = d.driver_name || ''
-  const title = [iface, driver].filter(Boolean).join(' · ')
-  return title || 'AT 串口设备'
+  return 'DJI Baiwang'
 }
 
 function discoveryModeText(d: DiscoveredDevice | null | undefined): string {

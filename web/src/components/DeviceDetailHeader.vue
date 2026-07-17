@@ -25,9 +25,6 @@ const publicIPText = computed(() => {
   return '---'
 })
 
-const isDJIModule = computed(() => (
-  props.device.vendor_id === 0x2ca3 && props.device.product_id === 0x4006
-))
 </script>
 
 <template>
@@ -36,8 +33,7 @@ const isDJIModule = computed(() => (
       <div class="min-w-0">
         <div class="flex items-center gap-3">
           <div class="device-header-brand-icon">
-            <img v-if="isDJIModule" class="device-header-dji-logo" src="/dji.svg" alt="" />
-            <span v-else>V</span>
+            <img class="device-header-dji-logo" src="/dji.svg" alt="" />
           </div>
           <div class="min-w-0">
             <div class="text-xl font-extrabold text-gray-900 dark:text-white truncate">{{ device.name || device.id }}</div>

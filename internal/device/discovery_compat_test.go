@@ -252,7 +252,7 @@ func TestDiscoverFallbackOneRejectsUnknownVendorWithoutNetworkCapability(t *test
 	}
 }
 
-func TestDiscoverFallbackOneAcceptsDJIBaiwangATOnlyDevice(t *testing.T) {
+func TestDiscoverFallbackOneRejectsOriginalDJIUSBID(t *testing.T) {
 	root := t.TempDir()
 	usbPath := filepath.Join(root, "3-2")
 	if err := os.MkdirAll(filepath.Join(usbPath, "3-2:1.2", "tty", "ttyUSB2"), 0o755); err != nil {
@@ -268,18 +268,8 @@ func TestDiscoverFallbackOneAcceptsDJIBaiwangATOnlyDevice(t *testing.T) {
 		t.Fatalf("symlink driver: %v", err)
 	}
 
-	got, ok := discoverFallbackOne(usbPath)
-	if !ok {
-		t.Fatal("discoverFallbackOne() rejected DJI Baiwang AT-only device")
-	}
-	if got.VendorID != 0x2ca3 || got.ProductID != 0x4006 {
-		t.Fatalf("ids=%04x:%04x, want 2ca3:4006", got.VendorID, got.ProductID)
-	}
-	if got.ATPort != "/dev/ttyUSB2" {
-		t.Fatalf("ATPort=%q want /dev/ttyUSB2", got.ATPort)
-	}
-	if got.Mode != "unknown" || got.NetworkCapable {
-		t.Fatalf("mode=%q network=%v, want unknown/non-network", got.Mode, got.NetworkCapable)
+	if got, ok := discoverFallbackOne(usbPath); ok {
+		t.Fatalf("original 2ca3:4006 must be converted before use, got %+v", got)
 	}
 }
 
@@ -388,13 +378,12 @@ func TestFindCDCWDMInUSBPath_FollowsUSBPathSymlink(t *testing.T) {
 
 func TestUSBHardwareIDsFollowsUSBPathSymlink(t *testing.T) {
 	realUSBPath := t.TempDir()
-	if err := os.WriteFile(filepath.Join(realUSBPath, "idVendor"), []byte("2ca3\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(realUSBPath, "idVendor"), []byte("2c7c\n"), 0o644); err != nil {
 		t.Fatalf("write idVendor: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(realUSBPath, "idProduct"), []byte("4006\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(realUSBPath, "idProduct"), []byte("0125\n"), 0o644); err != nil {
 		t.Fatalf("write idProduct: %v", err)
 	}
-
 	linkParent := t.TempDir()
 	linkUSBPath := filepath.Join(linkParent, "1-4")
 	interfacePath := filepath.Join(realUSBPath, "1-4:1.4")
@@ -406,8 +395,17 @@ func TestUSBHardwareIDsFollowsUSBPathSymlink(t *testing.T) {
 	}
 
 	vendorID, productID := USBHardwareIDs(linkUSBPath)
-	if vendorID != 0x2ca3 || productID != 0x4006 {
-		t.Fatalf("USBHardwareIDs()=%04x:%04x, want 2ca3:4006", vendorID, productID)
+	if vendorID != 0x2c7c || productID != 0x0125 {
+		t.Fatalf("USBHardwareIDs()=%04x:%04x, want 2c7c:0125", vendorID, productID)
+	}
+}
+
+func TestSupportedVoHiveUSBRequiresConvertedID(t *testing.T) {
+	if !isSupportedVoHiveUSB(0x2c7c, 0x0125) {
+		t.Fatal("converted 2c7c:0125 module must be supported")
+	}
+	if isSupportedVoHiveUSB(0x2ca3, 0x4006) {
+		t.Fatal("original 2ca3:4006 module must be converted before use")
 	}
 }
 

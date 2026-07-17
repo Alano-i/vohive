@@ -194,7 +194,7 @@ func TestDiscoverQMIDeviceFromSysFSAcceptsSierraQMIByCapability(t *testing.T) {
 	}
 }
 
-func TestDiscoverDJIBaiwangPrefersInterfaceTwoForAT(t *testing.T) {
+func TestDiscoverConvertedDJIBaiwangPrefersInterfaceTwoForAT(t *testing.T) {
 	usbPath := t.TempDir()
 	usbName := filepath.Base(usbPath)
 	write := func(rel, content string) {
@@ -208,8 +208,8 @@ func TestDiscoverDJIBaiwangPrefersInterfaceTwoForAT(t *testing.T) {
 		}
 	}
 
-	write("idVendor", "2ca3\n")
-	write("idProduct", "4006\n")
+	write("idVendor", "2c7c\n")
+	write("idProduct", "0125\n")
 	write("bNumInterfaces", "5\n")
 	for iface, tty := range []string{"ttyUSB20", "ttyUSB21", "ttyUSB22", "ttyUSB23"} {
 		if err := os.MkdirAll(filepath.Join(usbPath, usbName+":1."+strconv.Itoa(iface), "tty", tty), 0o755); err != nil {
@@ -233,6 +233,17 @@ func TestDiscoverDJIBaiwangPrefersInterfaceTwoForAT(t *testing.T) {
 	}
 	if got.ATPort != "/dev/ttyUSB22" {
 		t.Fatalf("ATPort=%q want interface-2 port /dev/ttyUSB22", got.ATPort)
+	}
+}
+
+func TestFilterSupportedQMIDevicesOnlyKeepsConvertedDJIUSBID(t *testing.T) {
+	got := filterSupportedQMIDevices([]QMIDevice{
+		{USBPath: "/sys/bus/usb/devices/1-1", VendorID: 0x2c7c, ProductID: 0x0125},
+		{USBPath: "/sys/bus/usb/devices/1-2", VendorID: 0x2ca3, ProductID: 0x4006},
+		{USBPath: "/sys/bus/usb/devices/1-3", VendorID: 0x2c7c, ProductID: 0x0901},
+	})
+	if len(got) != 1 || got[0].VendorID != 0x2c7c || got[0].ProductID != 0x0125 {
+		t.Fatalf("filterSupportedQMIDevices()=%+v, want only 2c7c:0125", got)
 	}
 }
 

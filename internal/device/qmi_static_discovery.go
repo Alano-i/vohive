@@ -56,8 +56,7 @@ func DiscoverQMIDevices() ([]QMIDevice, error) {
 	return discoverQMIDevices(true)
 }
 
-// DiscoverAllQMIDevices 发现所有可识别的调制解调器（包含缺少 control path 的设备）。
-// 主要用于调试或兼容场景；QMI 设备仍需满足 qmi_wwan + cdc-wdm 能力门。
+// DiscoverAllQMIDevices 发现全部已转换的 VoHive 模块（包含缺少 control path 的设备）。
 func DiscoverAllQMIDevices() ([]QMIDevice, error) {
 	return discoverQMIDevices(false)
 }
@@ -69,8 +68,10 @@ func discoverQMIDevices(requireControlPath bool) ([]QMIDevice, error) {
 
 	usbDevices, err := os.ReadDir("/sys/bus/usb/devices")
 	if err != nil {
-		if wwanDevices, wwanErr := discoverWWANQMIDevices(); wwanErr == nil && len(wwanDevices) > 0 {
-			return wwanDevices, nil
+		if wwanDevices, wwanErr := discoverWWANQMIDevices(); wwanErr == nil {
+			if supported := filterSupportedQMIDevices(wwanDevices); len(supported) > 0 {
+				return supported, nil
+			}
 		}
 		return nil, fmt.Errorf("读取 USB 设备失败: %w", err)
 	}
@@ -82,12 +83,15 @@ func discoverQMIDevices(requireControlPath bool) ([]QMIDevice, error) {
 		if strings.HasPrefix(entry.Name(), "usb") {
 			continue
 		}
+		path := filepath.Join("/sys/bus/usb/devices", entry.Name())
+		vendorID, productID := USBHardwareIDs(path)
+		if !isSupportedVoHiveUSB(vendorID, productID) {
+			continue
+		}
 
 		wg.Add(1)
-		go func(e os.DirEntry) {
+		go func(path string) {
 			defer wg.Done()
-
-			path := filepath.Join("/sys/bus/usb/devices", e.Name())
 			type result struct {
 				val *QMIDevice
 				err error
@@ -112,7 +116,7 @@ func discoverQMIDevices(requireControlPath bool) ([]QMIDevice, error) {
 				}
 			case <-time.After(5 * time.Second):
 			}
-		}(entry)
+		}(path)
 	}
 
 	wg.Wait()
@@ -120,9 +124,10 @@ func discoverQMIDevices(requireControlPath bool) ([]QMIDevice, error) {
 	if wwanDevices, err := discoverWWANQMIDevices(); err == nil && len(wwanDevices) > 0 {
 		devices = mergeQMIDeviceLists(devices, wwanDevices)
 	}
+	devices = filterSupportedQMIDevices(devices)
 
 	if len(devices) == 0 {
-		return nil, fmt.Errorf("未发现调制解调器")
+		return nil, fmt.Errorf("未发现已转换为 2c7c:0125 的 DJI 模块")
 	}
 
 	return devices, nil
@@ -149,26 +154,8 @@ func discoverQMIDeviceFromSysFS(usbPath string) (*QMIDevice, error) {
 		ControlPath:  capability.ControlPath,
 	}
 
-	// atIntf 只是一个静态“主候选口”提示，来自常见 Quectel 机型的 interface 经验值；
-	// 真正哪个 AT 口可用，仍由上层在本设备 ATPorts 范围内继续探测确认。
 	atIntf := -1
-	if vid == 0x2c7c {
-		switch pid {
-		case 0x0901, 0x0902, 0x8101:
-			atIntf = 2
-		case 0x0900:
-			atIntf = 4
-		case 0x6026, 0x6005, 0x6002, 0x6001:
-			atIntf = 3
-		case 0x6007:
-			atIntf = 3
-		default:
-			atIntf = 2
-		}
-	} else if vid == 0x05c6 {
-		atIntf = 2
-	} else if vid == 0x2ca3 && pid == 0x4006 {
-		// DJI/Baiwang QDC507 exposes its command AT port on USB interface 2.
+	if isSupportedVoHiveUSB(vid, pid) {
 		atIntf = 2
 	}
 
@@ -188,6 +175,33 @@ func discoverQMIDeviceFromSysFS(usbPath string) (*QMIDevice, error) {
 	md.AudioDevice, md.AudioCardNum = findAudioDevice(scanUSBPath)
 
 	return md, nil
+}
+
+func isSupportedVoHiveUSB(vendorID, productID uint16) bool {
+	return vendorID == 0x2c7c && productID == 0x0125
+}
+
+func filterSupportedQMIDevices(devices []QMIDevice) []QMIDevice {
+	out := make([]QMIDevice, 0, len(devices))
+	for _, dev := range devices {
+		vendorID, productID := dev.VendorID, dev.ProductID
+		if vendorID == 0 || productID == 0 {
+			liveVendorID, liveProductID := USBHardwareIDs(dev.USBPath)
+			if vendorID == 0 {
+				vendorID = liveVendorID
+			}
+			if productID == 0 {
+				productID = liveProductID
+			}
+		}
+		if !isSupportedVoHiveUSB(vendorID, productID) {
+			continue
+		}
+		dev.VendorID = vendorID
+		dev.ProductID = productID
+		out = append(out, dev)
+	}
+	return out
 }
 
 func discoverWWANQMIDevices() ([]QMIDevice, error) {

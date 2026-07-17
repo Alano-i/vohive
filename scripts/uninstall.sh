@@ -23,9 +23,9 @@ This removes all VoHive-owned files:
   Working dir:     ${WORK_DIR}
   systemd unit:    ${SERVICE_FILE}
   systemd drop-in: ${SERVICE_DROPIN_DIR}
-  USB service:     ${USB_DRIVER_SERVICE}
-  USB bind script: ${USB_BIND_SCRIPT}
-  udev rule:       ${USB_UDEV_RULE}
+  Legacy USB unit: ${USB_DRIVER_SERVICE}
+  Legacy USB tool: ${USB_BIND_SCRIPT}
+  Legacy udev rule: ${USB_UDEV_RULE}
 EOF
 }
 

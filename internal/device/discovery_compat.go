@@ -98,7 +98,10 @@ func discoverFallbackModems() ([]CompatibleModem, error) {
 	out := make([]CompatibleModem, 0)
 	if wwanList, err := discoverWWANQMIDevices(); err == nil {
 		for _, d := range wwanList {
-			out = append(out, compatibleModemFromQMIStaticDevice(d))
+			m := compatibleModemFromQMIStaticDevice(d)
+			if isSupportedVoHiveUSB(m.VendorID, m.ProductID) {
+				out = append(out, m)
+			}
 		}
 	}
 
@@ -116,8 +119,12 @@ func discoverFallbackModems() ([]CompatibleModem, error) {
 			continue
 		}
 		usbPath := filepath.Join("/sys/bus/usb/devices", name)
+		vendorID, productID := USBHardwareIDs(usbPath)
+		if !isSupportedVoHiveUSB(vendorID, productID) {
+			continue
+		}
 		m, ok := discoverFallbackOne(usbPath)
-		if !ok {
+		if !ok || !isSupportedVoHiveUSB(m.VendorID, m.ProductID) {
 			continue
 		}
 		out = append(out, m)
@@ -127,12 +134,23 @@ func discoverFallbackModems() ([]CompatibleModem, error) {
 
 func compatibleModemFromQMIStaticDevice(d QMIDevice) CompatibleModem {
 	mode := classifyMode(strings.TrimSpace(d.ControlPath), strings.TrimSpace(d.DriverName))
+	vendorID := d.VendorID
+	productID := d.ProductID
+	if vendorID == 0 || productID == 0 {
+		liveVendorID, liveProductID := USBHardwareIDs(d.USBPath)
+		if vendorID == 0 {
+			vendorID = liveVendorID
+		}
+		if productID == 0 {
+			productID = liveProductID
+		}
+	}
 	return CompatibleModem{
 		ControlPath:    strings.TrimSpace(d.ControlPath),
 		NetInterface:   strings.TrimSpace(d.NetInterface),
 		USBPath:        strings.TrimSpace(d.USBPath),
-		VendorID:       d.VendorID,
-		ProductID:      d.ProductID,
+		VendorID:       vendorID,
+		ProductID:      productID,
 		DriverName:     strings.TrimSpace(d.DriverName),
 		ATPorts:        dedupSortedNonEmpty(d.ATPorts),
 		ATPort:         strings.TrimSpace(d.ATPort),
@@ -189,7 +207,7 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 		}, true
 	}
 
-	if !isATCompatibleUSBDevice(vid, pid) {
+	if !isSupportedVoHiveUSB(vid, pid) {
 		return CompatibleModem{}, false
 	}
 
@@ -218,19 +236,6 @@ func discoverFallbackOne(usbPath string) (CompatibleModem, bool) {
 		TransportType:  mode,
 		NetworkCapable: mode == "qmi" || mode == "mbim",
 	}, true
-}
-
-func isATCompatibleUSBDevice(vid, pid uint16) bool {
-	switch vid {
-	case 0x2c7c: // Quectel
-		return true
-	case 0x05c6: // Qualcomm reference/vendor-specific devices
-		return true
-	case 0x2ca3: // DJI/Baiwang modules expose vendor-specific USB serial AT ports.
-		return pid == 0x4006
-	default:
-		return false
-	}
 }
 
 func classifyMode(controlPath, driver string) string {
@@ -298,9 +303,8 @@ func resolveUSBPathForScan(usbPath string) string {
 	return resolved
 }
 
-// USBHardwareIDs returns the USB vendor and product IDs for a live device path.
-// The path may point at a USB interface or class-device symlink, so walk up to
-// the physical USB device that owns idVendor and idProduct.
+// USBHardwareIDs returns IDs for a live USB path. The path may point at an
+// interface or class-device symlink, so walk up to the physical USB device.
 func USBHardwareIDs(usbPath string) (uint16, uint16) {
 	scanPath := resolveUSBPathForScan(usbPath)
 	for scanPath != "" {
@@ -318,7 +322,7 @@ func USBHardwareIDs(usbPath string) (uint16, uint16) {
 	return 0, 0
 }
 
-// USBHardwareIDsForDevice resolves hardware IDs from whichever live path the
+// USBHardwareIDsForDevice resolves IDs from whichever live path the
 // worker currently has. Network, usbmisc and tty class paths all converge on
 // the same physical USB parent.
 func USBHardwareIDsForDevice(usbPath, netInterface, controlPath, atPort string) (uint16, uint16) {

@@ -77,10 +77,35 @@ curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install
 - systemd 服务: `vohive.service`
 - Web 管理地址: `http://<服务器IP>:7575`
 
-对于 DJI Baiwang (`2ca3:4006`) 设备，安装器还会配置启动前 USB
-准备服务：主机每次开机时先通过专用 AT 接口重启仍由 USB 供电的模组，
-等待重新枚举并绑定 `option` + `qmi_wwan` 后再启动 VoHive，避免上一次
-进程遗留的 QMI CTL 响应导致设备在线但数据面和 SIM 身份不可用。
+VoHive 运行时只支持已转换为 `2c7c:0125` 的 DJI Baiwang 模块，使用前必须
+先完成转换；原始 `2ca3:4006` 不会进入设备发现列表。转换后的模块由 Linux 内核原生的
+`option` 和 `qmi_wwan` 驱动自动接管；安装器不会写入动态 USB ID、强制绑定
+驱动或在开机时重启模块。升级安装会自动清理旧版本遗留的 USB 绑定服务。
+
+### DJI USB ID 伪装与恢复
+
+运行统一的 USB ID 管理脚本：
+
+```sh
+sudo sh scripts/dji-usb-mode.sh
+```
+
+脚本启动后选择 `1`，会将当前插入的全部 DJI Baiwang 模块从 `2ca3:4006`
+转换为 Linux 原生支持的 Quectel EC25 USB ID `2c7c:0125`；选择 `2`，会将
+当前插入且 USB 厂商或产品字符串仍为 Baiwang 的 `2c7c:0125` 模块恢复为
+DJI 原始 ID `2ca3:4006`。
+
+脚本会按 USB 物理路径逐台处理，不依赖固定的 `/dev/ttyUSBX` 编号。
+伪装前读取到的原始 `USBCFG` 会按 IMEI 保存在
+`/var/lib/vohive/dji-usb-backups`。执行前可使用 `--dry-run` 只查询并展示计划，
+不写入模块：
+
+```sh
+sudo sh scripts/dji-usb-mode.sh --dry-run
+```
+
+USB ID 配置写入模块 NVRAM，断电或更换服务器后仍然有效。脚本会临时停止并在
+结束后恢复 `vohive.service` 和 `ModemManager.service`，但转换期间相关业务会短暂中断。
 
 ### 本地二进制安装
 
