@@ -200,7 +200,7 @@ jobs:
           chmod 0755 dist/install.sh dist/install-local.sh dist/uninstall.sh dist/dji-usb-mode.sh
 
       - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release_vars.outputs.release_version }}
           files: dist/*
