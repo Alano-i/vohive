@@ -54,7 +54,7 @@ make dev
 在 Debian 或 Debian 兼容系统上执行:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install.sh | sh
 ```
 
 安装脚本会自动识别当前系统架构,并从最新 GitHub Release 下载对应平台的二进制包:
@@ -66,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install
 如需安装指定版本:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install.sh | sudo sh -s -- --version v0.1.1
+curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/install.sh | sh -s -- --version v0.1.1
 ```
 
 安装完成后:
@@ -120,7 +120,7 @@ sudo sh scripts/install-local.sh ./vohive_v0.1.1_linux_amd64
 执行以下命令会停止服务并删除 VoHive 安装产生的全部文件,包括二进制、配置、数据目录、systemd unit、udev 规则和 USB 驱动绑定脚本:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/uninstall.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/Alano-i/vohive/main/scripts/uninstall.sh | sh
 ```
 
 如果是在源码目录内执行:
