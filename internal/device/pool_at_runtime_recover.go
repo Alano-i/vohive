@@ -10,6 +10,10 @@ import (
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
+func replaceBackendDuringATRuntimeRecovery(cfg config.DeviceConfig) bool {
+	return resolvedBackendMode(cfg) == backend.BackendAT
+}
+
 // EnsureESIMRuntime makes sure the APDU runtime used by eSIM operations is
 // actually usable. DJI/Baiwang devices keep the worker alive when the auxiliary
 // AT port drops because QMI remains the authoritative lifecycle channel. That is
@@ -65,9 +69,11 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 	cfg := worker.Config
 	cfg.ATPort = port
 	cfg.ManagePort = port
-	if strings.TrimSpace(cfg.DeviceBackend) == "" {
-		cfg.DeviceBackend = backend.BackendAT
-	}
+	replaceBackend := replaceBackendDuringATRuntimeRecovery(cfg)
+	// This manager is an auxiliary AT runtime. The worker's persisted data
+	// backend remains QMI/MBIM and is restored below after eSIM initialization.
+	cfg.DeviceBackend = backend.BackendAT
+	cfg.ESIMTransport = config.ESIMTransportAT
 
 	nextModem, err := modem.New(cfg)
 	if err != nil {
@@ -100,14 +106,17 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 		return fmt.Errorf("启动 AT 管理器失败: %w", err)
 	}
 
-	nextBackend, err := backend.NewBackend(backend.BackendAT, cfg.ControlDevice, nextModem, nil, nil)
-	if err != nil {
-		nextModem.Stop()
-		return fmt.Errorf("重建 AT 后端失败: %w", err)
+	oldBackend := worker.Backend
+	nextBackend := oldBackend
+	if replaceBackend {
+		nextBackend, err = backend.NewBackend(backend.BackendAT, cfg.ControlDevice, nextModem, nil, nil)
+		if err != nil {
+			nextModem.Stop()
+			return fmt.Errorf("重建 AT 后端失败: %w", err)
+		}
 	}
 
 	oldModem := worker.Modem
-	oldBackend := worker.Backend
 	worker.Modem = nextModem
 	worker.Backend = nextBackend
 	worker.Config.ATPort = port
@@ -118,14 +127,16 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 	if err != nil {
 		worker.Modem = oldModem
 		worker.Backend = oldBackend
-		_ = nextBackend.Close()
+		if replaceBackend && nextBackend != nil {
+			_ = nextBackend.Close()
+		}
 		nextModem.Stop()
 		return fmt.Errorf("重建 eSIM 管理器失败: %w", err)
 	}
 	worker.EsimMgr = nextESIMMgr
 	p.bindModemReadyIndications(worker)
 
-	if oldBackend != nil {
+	if replaceBackend && oldBackend != nil {
 		_ = oldBackend.Close()
 	}
 	if oldModem != nil && oldModem != nextModem {
@@ -135,6 +146,8 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 	logger.Info("已重建 AT/eSIM 运行时",
 		"device", worker.ID,
 		"reason", reason,
-		"at_port", port)
+		"at_port", port,
+		"data_backend", resolvedBackendMode(worker.Config),
+		"esim_transport", config.ESIMTransportAT)
 	return nil
 }

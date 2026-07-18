@@ -74,6 +74,43 @@ func TestDeviceConfigRequiresRestartIgnoresIMEIFormatOnly(t *testing.T) {
 	}
 }
 
+func TestCanHotSwitchDeviceBackend(t *testing.T) {
+	base := config.DeviceConfig{
+		ID:            "baiwang3",
+		DeviceBackend: "at",
+		ControlDevice: "/dev/cdc-wdm2",
+		Interface:     "wwan2",
+		ATPort:        "/dev/ttyUSB10",
+	}
+
+	qmi := base
+	qmi.DeviceBackend = "qmi"
+	if !canHotSwitchDeviceBackend(base, qmi) {
+		t.Fatal("pure AT to QMI mode change should be hot-switchable")
+	}
+	if !canHotSwitchDeviceBackend(qmi, base) {
+		t.Fatal("pure QMI to AT mode change should be hot-switchable")
+	}
+
+	changedPort := qmi
+	changedPort.ControlDevice = "/dev/cdc-wdm3"
+	if !canHotSwitchDeviceBackend(base, changedPort) {
+		t.Fatal("runtime-discovered control path must not block backend hot switch")
+	}
+
+	changedProxy := qmi
+	changedProxy.QMIUseProxy = true
+	if canHotSwitchDeviceBackend(base, changedProxy) {
+		t.Fatal("backend and QMI proxy change must rebuild")
+	}
+
+	mbim := qmi
+	mbim.DeviceBackend = "mbim"
+	if canHotSwitchDeviceBackend(qmi, mbim) {
+		t.Fatal("MBIM transition must rebuild")
+	}
+}
+
 func TestDeviceConfigMBIMManagedNetworkChangesRequiresRebuild(t *testing.T) {
 	base := config.DeviceConfig{
 		APN:           "internet",

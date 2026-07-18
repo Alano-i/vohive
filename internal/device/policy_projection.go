@@ -6,6 +6,7 @@ import (
 
 	"github.com/iniwex5/vohive/internal/backend"
 	"github.com/iniwex5/vohive/internal/cardpolicy"
+	mbimcore "github.com/iniwex5/vohive/internal/mbim"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
@@ -19,7 +20,12 @@ func applyPolicyToWorker(w *Worker, p cardpolicy.Policy) {
 	w.Config.VoWiFiEnabled = p.VoWiFiEnabled
 	w.Config.AirplaneEnabled = p.AirplaneEnabled
 	if p.VoWiFiEnabled {
+		// VoWiFi 接管射频时，蜂窝数据面必须保持关闭；保留的网络意图
+		// 记录在 restoreNetworkAfterVoWiFi，关闭 VoWiFi 后可重新投影。
+		w.Config.NetworkEnabled = false
 		w.Config.AirplaneEnabled = true
+	} else if p.AirplaneEnabled {
+		w.Config.NetworkEnabled = false
 	}
 	w.Config.IPVersion = strings.TrimSpace(p.IPVersion)
 	if w.Config.IPVersion == "" {
@@ -28,6 +34,23 @@ func applyPolicyToWorker(w *Worker, p cardpolicy.Policy) {
 	w.Config.APN = strings.TrimSpace(p.APN)
 	w.Config.SMSEnabled = true // SMS 恒开
 	w.restoreNetworkAfterVoWiFi = p.NetworkEnabled
+}
+
+func syncWorkerPolicyDataConfig(w *Worker) error {
+	if w == nil {
+		return nil
+	}
+	if w.QMICore != nil {
+		if err := w.QMICore.SetDataConfig(w.Config.APN, w.Config.IPVersion); err != nil {
+			return err
+		}
+	}
+	if w.MBIMCore != nil {
+		w.MBIMCore.SetDataConfig(mbimcore.DataConfig{
+			APN: w.Config.APN, Interface: w.Config.Interface, IPVersion: w.Config.IPVersion,
+		})
+	}
+	return nil
 }
 
 type policyApplyResult struct {
@@ -52,6 +75,10 @@ func (p *Pool) resolveAndApplyPolicy(worker *Worker, reason string) policyApplyR
 		return policyApplyResult{ICCID: iccid, Reason: "resolve_failed"}
 	}
 	applyPolicyToWorker(worker, pol)
+	if err := syncWorkerPolicyDataConfig(worker); err != nil {
+		logger.Warn("同步卡策略到底层数据配置失败", "device", worker.ID, "iccid", iccid, "err", err)
+		return policyApplyResult{ICCID: iccid, Reason: "data_config_sync_failed"}
+	}
 	logger.Info("已投影卡策略", "device", worker.ID, "iccid", iccid,
 		"network", pol.NetworkEnabled, "vowifi", pol.VoWiFiEnabled,
 		"airplane", worker.Config.AirplaneEnabled, "reason", reason)

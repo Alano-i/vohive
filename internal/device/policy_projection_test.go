@@ -17,8 +17,11 @@ func TestApplyPolicyProjectsFields(t *testing.T) {
 		ICCID: "x", NetworkEnabled: true, VoWiFiEnabled: true,
 		AirplaneEnabled: true, IPVersion: "v4v6", APN: "ims",
 	})
-	if !w.Config.NetworkEnabled || !w.Config.VoWiFiEnabled || !w.Config.AirplaneEnabled {
+	if w.Config.NetworkEnabled || !w.Config.VoWiFiEnabled || !w.Config.AirplaneEnabled {
 		t.Fatalf("开关未投影: %+v", w.Config)
+	}
+	if !w.restoreNetworkAfterVoWiFi {
+		t.Fatal("VoWiFi 应保留原网络意图供关闭后恢复")
 	}
 	if w.Config.IPVersion != "v4v6" || w.Config.APN != "ims" {
 		t.Fatalf("ip/apn 未投影: %+v", w.Config)

@@ -21,15 +21,20 @@ import (
 	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
 )
 
-// deriveESIMTransport 从 device_backend 推导 eSIM 传输通道。
-// device_backend=qmi 时 eSIM 走 QMI，device_backend=mbim 时走 MBIM，否则走 AT。
-// 向下兼容：如果 esim_transport 有显式配置且 device_backend 为空，优先使用显式传输通道。
+// deriveESIMTransport 优先使用显式 eSIM 通道，否则从设备后端推导。
+// 这允许 DJI 模组使用 QMI 管理数据网络，同时通过辅助 AT 口管理 eSTK.me。
 func deriveESIMTransport(cfg config.DeviceConfig) string {
-	backend := strings.ToLower(strings.TrimSpace(cfg.DeviceBackend))
-	legacy := strings.ToLower(strings.TrimSpace(cfg.ESIMTransport))
+	explicit := strings.ToLower(strings.TrimSpace(cfg.ESIMTransport))
+	if explicit != "" {
+		return config.NormalizeESIMTransport(explicit)
+	}
 
+	backend := strings.ToLower(strings.TrimSpace(cfg.DeviceBackend))
 	switch backend {
 	case "qmi":
+		if strings.TrimSpace(cfg.ATPort) != "" || strings.TrimSpace(cfg.ManagePort) != "" {
+			return config.ESIMTransportAT
+		}
 		return config.ESIMTransportQMI
 	case "mbim":
 		return config.ESIMTransportMBIM
@@ -37,12 +42,7 @@ func deriveESIMTransport(cfg config.DeviceConfig) string {
 		return config.ESIMTransportAT
 	}
 
-	switch legacy {
-	case config.ESIMTransportQMI, config.ESIMTransportMBIM:
-		return legacy
-	default:
-		return config.ESIMTransportAT
-	}
+	return config.ESIMTransportAT
 }
 
 // resolveESIMTransport 在 deriveESIMTransport 基础上结合运行期能力做降级：
@@ -554,13 +554,19 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 	}
 
 	if backendMode == backend.BackendQMI {
-		w.smsMode = smsModeQMI
+		p.configureWorkerSMSRuntime(w, backendMode)
 		if smsCore := w.smsQMICore(); smsCore != nil {
 			smsCore.OnNewSMSWithStorage(func(storage uint8, index uint32) {
+				if w.smsMode != smsModeQMI {
+					return
+				}
 				logger.Info(fmt.Sprintf("[%s] 收到 QMI 短信 URC 通知", w.ID), "index", index, "storage", storage)
 				w.handleNewSMSQMI(storage, index)
 			})
 			smsCore.OnNewSMSRaw(func(info qmicore.RawSMSIndication) {
+				if w.smsMode != smsModeQMI {
+					return
+				}
 				logger.Info(fmt.Sprintf("[%s] 收到 QMI 原始短信通知", w.ID),
 					"pdu_len", len(info.PDU),
 					"ack_required", info.AckRequired,
@@ -581,12 +587,7 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 		}
 		// 纯 MBIM 模式不监听 AT URC；短信通过 MBIM SMS service 接收。
 	} else {
-		w.smsMode = smsModeAT
-		m.SetNewSMSHandler(nil)
-		m.SetDisableURCRead(false)
-		m.SetSMSCallback(func(sender, content string, timestamp time.Time) {
-			w.processSMS(sender, content, timestamp)
-		})
+		p.configureWorkerSMSRuntime(w, backendMode)
 	}
 	logger.Info(fmt.Sprintf("[%s] 短信模式已配置", w.ID), "sms_mode", w.smsMode.String(), "backend", backendMode)
 
@@ -689,6 +690,7 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 
 			_, err := p.refreshIdentityAndApplyCardPolicy(worker, "startup_post_apply")
 			if err == nil && worker.CurrentICCID() != "" {
+				p.prewarmActiveESIMProfileName(worker, "startup_post_apply")
 				return
 			}
 

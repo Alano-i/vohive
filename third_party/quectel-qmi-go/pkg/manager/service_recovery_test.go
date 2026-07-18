@@ -209,6 +209,37 @@ func TestContextCanceledDoesNotTriggerServiceRecovery(t *testing.T) {
 	}
 }
 
+func TestTimeoutStormSuppressedDuringCoreStartupGrace(t *testing.T) {
+	m := newRecoveryTestManager()
+	m.coreReady = true
+	m.coreReadySince = time.Now()
+
+	m.detectTimeoutStorm("NAS")
+	m.detectTimeoutStorm("DMS")
+
+	select {
+	case evt := <-m.eventCh:
+		t.Fatalf("unexpected recovery event during startup grace: %v", evt)
+	default:
+	}
+	if got := m.Stats().ResetEvents; got != 0 {
+		t.Fatalf("reset events = %d, want 0", got)
+	}
+}
+
+func TestTimeoutStormTriggersAfterCoreStartupGrace(t *testing.T) {
+	m := newRecoveryTestManager()
+	m.coreReady = true
+	m.coreReadySince = time.Now().Add(-time.Minute)
+
+	m.detectTimeoutStorm("NAS")
+	m.detectTimeoutStorm("DMS")
+
+	if evt := waitInternalRecoveryEvent(t, m.eventCh, time.Second); evt != eventModemReset {
+		t.Fatalf("expected eventModemReset, got %v", evt)
+	}
+}
+
 func TestDMSRecoveryRebindThenRetrySuccess(t *testing.T) {
 	m := newRecoveryTestManager()
 	m.ensureDMSServiceHook = func() (*qmi.DMSService, error) { return &qmi.DMSService{}, nil }

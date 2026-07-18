@@ -26,7 +26,12 @@ export function isRadioRegistered(device: DeviceLike | null | undefined) {
 }
 
 export function isSIMMissing(device: DeviceLike | null | undefined) {
-  return device?.running === true && device.modem?.sim_inserted === false
+  if (!device || isRecoveryPhase(device.lifecycle_phase)) return false
+  // A zero-value modem snapshot also reports sim_inserted=false while QMI is
+  // unavailable. Only treat it as authoritative after the control plane is up.
+  return device.running === true &&
+    (device.control_online ?? device.healthy) === true &&
+    device.modem?.sim_inserted === false
 }
 
 export function lifecycleStatusLabel(phase?: DeviceLifecyclePhase) {

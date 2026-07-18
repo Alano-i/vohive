@@ -2,12 +2,13 @@ package device
 
 import (
 	"context"
+	"strings"
 	"time"
 
-	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
-	qmipkg "github.com/iniwex5/vohive/internal/qmi"
+	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	"github.com/iniwex5/vohive/internal/backend"
+	qmipkg "github.com/iniwex5/vohive/internal/qmi"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
@@ -28,11 +29,21 @@ type startupProvisioningEnsurer interface {
 // 编译期保证 *qmipkg.Manager 满足 ensurer 接口；签名漂移将直接 break build 而非静默跳过。
 var _ startupProvisioningEnsurer = (*qmipkg.Manager)(nil)
 
+func workerUsesAuxATUICC(w *Worker) bool {
+	return w != nil && deriveESIMTransport(w.Config) == "at" && strings.TrimSpace(w.ResolvedATPort()) != ""
+}
+
 func cleanupWorkerStartupSIMAuthLogicalChannels(w *Worker) {
 	if w == nil || w.Backend == nil {
 		return
 	}
 	if w.QMICore != nil {
+		if workerUsesAuxATUICC(w) {
+			logger.Debug("启动期跳过 QMI UIM reset：设备使用辅助 AT UICC 通道",
+				"device", w.ID,
+				"at_port", w.ResolvedATPort())
+			return
+		}
 		performStartupQMIUIMReset(w.ID, w.QMICore, w.QMICore, startupQMISIMReadyCheck(w.QMICore), 5*time.Second, 250*time.Millisecond)
 		return
 	}

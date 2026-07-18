@@ -98,10 +98,12 @@ func deviceConfigFromDTOWithBase(d deviceConfigDTO, base *config.DeviceConfig) c
 	qmiUseProxy := false
 	qmiProxyPath := ""
 	qmiProxyExecutable := ""
+	esimEnabled := d.ESIMEnabled
 	if base != nil {
 		qmiUseProxy = base.QMIUseProxy
 		qmiProxyPath = base.QMIProxyPath
 		qmiProxyExecutable = base.QMIProxyExecutable
+		esimEnabled = esimEnabled || base.ESIMEnabled
 	}
 	if d.QMIUseProxy != nil {
 		qmiUseProxy = *d.QMIUseProxy
@@ -125,7 +127,7 @@ func deviceConfigFromDTOWithBase(d deviceConfigDTO, base *config.DeviceConfig) c
 		QMIProxyPath:          qmiProxyPath,
 		QMIProxyExecutable:    qmiProxyExecutable,
 		ESIMTransport:         config.NormalizeESIMTransport(d.ESIMTransport),
-		ESIMEnabled:           d.ESIMEnabled,
+		ESIMEnabled:           esimEnabled,
 		BaudRate:              d.BaudRate,
 		DataBits:              d.DataBits,
 		StopBits:              d.StopBits,
@@ -646,22 +648,24 @@ func activeESIMProfileName(w *device.Worker) string {
 }
 
 type overviewStreamEmitVersion struct {
-	VoWiFiActive    bool
-	LifecyclePhase  string
-	LifecycleReason string
-	HasRuntime      bool
-	Phase           string
-	TunnelReady     bool
-	IMSReady        bool
-	SMSReady        bool
-	LastErrorClass  string
+	ActiveESIMProfileName string
+	VoWiFiActive          bool
+	LifecyclePhase        string
+	LifecycleReason       string
+	HasRuntime            bool
+	Phase                 string
+	TunnelReady           bool
+	IMSReady              bool
+	SMSReady              bool
+	LastErrorClass        string
 }
 
 func newOverviewStreamEmitVersion(item deviceMgmtOverviewLiteItem) overviewStreamEmitVersion {
 	v := overviewStreamEmitVersion{
-		VoWiFiActive:    item.VoWiFiActive,
-		LifecyclePhase:  item.LifecyclePhase,
-		LifecycleReason: item.LifecycleReason,
+		ActiveESIMProfileName: item.ActiveESIMProfileName,
+		VoWiFiActive:          item.VoWiFiActive,
+		LifecyclePhase:        item.LifecyclePhase,
+		LifecycleReason:       item.LifecycleReason,
 	}
 	if item.VoWiFiRuntime != nil {
 		v.HasRuntime = true
@@ -1403,16 +1407,27 @@ func (s *Server) handleDeviceMgmtUpdateDevice(c *gin.Context) {
 	}
 
 	worker := s.pool.GetWorker(id)
+	hotSwitchBackend := worker != nil && canHotSwitchDeviceBackend(oldCfg, newCfg)
 	s.pool.UpdateWorkerConfig(id, newCfg, !requiresRestart)
 
 	// 检测 DeviceBackend 状态变化，或 VoWiFi 从开启变为关闭都需要彻底重建 Worker 释放残余句柄
-	needsRebuild := oldCfg.DeviceBackend != newCfg.DeviceBackend ||
+	needsRebuild := (oldCfg.DeviceBackend != newCfg.DeviceBackend && !hotSwitchBackend) ||
 		qmiProxyConfigChanged(oldCfg, newCfg) ||
 		(!newCfg.VoWiFiEnabled && oldCfg.VoWiFiEnabled) ||
-		(worker != nil && managedNetworkConfigChanged(oldCfg, newCfg))
+		(worker != nil && !hotSwitchBackend && managedNetworkConfigChanged(oldCfg, newCfg))
 	shouldApplyNetworkNow := worker != nil || needsRebuild
 
 	warningMessage := forcedWarning
+	if hotSwitchBackend {
+		if err := s.pool.SwitchWorkerBackend(id, newCfg); err != nil {
+			logger.Error("原地切换设备后端失败", "device", id, "err", err)
+			needsRebuild = true
+			warningMessage = joinWarningMessages(warningMessage, "原地切换运行模式失败，正在尝试完整重建: "+err.Error())
+		} else {
+			requiresRestart = false
+			worker = s.pool.GetWorker(id)
+		}
+	}
 	if needsRebuild {
 		logger.Info("配置保存触发底盘或 VoWiFi 停止变更，将彻底重建 Worker", "device", id)
 		if err := s.pool.RebuildWorker(id); err != nil {
@@ -1722,6 +1737,23 @@ func (s *Server) esimWorkerForRequest(c *gin.Context, id, reason string) (*devic
 	return worker, true
 }
 
+func (s *Server) rememberESIMCapability(deviceID string) {
+	cfg, err := config.GetDeviceByID(deviceID)
+	if err != nil || cfg == nil || cfg.ESIMEnabled {
+		return
+	}
+	next := *cfg
+	next.ESIMEnabled = true
+	if err := config.UpdateDeviceInFile(s.configPath, deviceID, next); err != nil {
+		logger.Warn("持久化 eSIM 能力标记失败", "device", deviceID, "err", err)
+		return
+	}
+	if s.pool != nil {
+		s.pool.MarkESIMEnabled(deviceID)
+	}
+	logger.Info("设备 eSIM 能力已确认并持久化", "device", deviceID)
+}
+
 // handleEsimListProfiles 获取 eSIM Profile 列表
 func (s *Server) handleEsimListProfiles(c *gin.Context) {
 	id := deviceIDParam(c)
@@ -1750,6 +1782,9 @@ func (s *Server) handleEsimListProfiles(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if len(profiles) > 0 {
+		s.rememberESIMCapability(id)
 	}
 	c.JSON(http.StatusOK, profiles)
 }
@@ -2035,6 +2070,7 @@ func (s *Server) handleEsimGetChipInfo(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	s.rememberESIMCapability(id)
 	c.JSON(http.StatusOK, chipInfo)
 }
 
@@ -2067,6 +2103,7 @@ func (s *Server) handleEsimGetOverview(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	s.rememberESIMCapability(id)
 
 	c.JSON(http.StatusOK, overview)
 }

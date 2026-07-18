@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -198,6 +199,22 @@ func TestAllocateServicesReturnsErrorWhenCoreServiceAllocationFails(t *testing.T
 				t.Fatalf("allocateServices() error=%v, want to wrap ErrServiceNotSupported", err)
 			}
 		})
+	}
+}
+
+func TestRunStartupServiceTasksSequentialPreservesOrder(t *testing.T) {
+	m := newRecoveryTestManager()
+	order := make([]int, 0, 3)
+	tasks := []startupServiceTask{
+		{run: func(context.Context) error { order = append(order, 1); return nil }},
+		{run: func(context.Context) error { order = append(order, 2); return nil }},
+		{run: func(context.Context) error { order = append(order, 3); return nil }},
+	}
+	if err := m.runStartupServiceTasksSequential(context.Background(), true, tasks); err != nil {
+		t.Fatalf("runStartupServiceTasksSequential() error = %v", err)
+	}
+	if !reflect.DeepEqual(order, []int{1, 2, 3}) {
+		t.Fatalf("allocation order = %v", order)
 	}
 }
 

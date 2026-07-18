@@ -63,20 +63,22 @@ const (
 )
 
 type Config struct {
-	Device          ModemDevice // Modem device info / Modem 设备信息
-	APN             string      // APN (Access Point Name) / APN（接入点名称）
-	Username        string      // Authentication username / 认证用户名
-	Password        string      // Authentication password / 认证密码
-	AuthType        uint8       // 0=none, 1=PAP, 2=CHAP, 3=PAP|CHAP / 认证类型
-	EnableIPv4      bool        // Enable IPv4 / 启用 IPv4
-	EnableIPv6      bool        // Enable IPv6 / 启用 IPv6
-	PINCode         string      // SIM PIN code / SIM 卡 PIN 码
-	AutoReconnect   bool        // Automatically reconnect on disconnect / 断开后自动重连
-	NoRoute         bool        // Don't add default route (useful for debugging) / 不添加默认路由 (用于调试)
-	NoDNS           bool        // Don't configure DNS (useful for debugging) / 不配置DNS (用于调试)
-	DisableWMSInd   bool        // Disable WMS indications (Event Report) / 禁用 WMS 指示 (事件报告)
-	DisableIMSAInd  bool        // Disable IMSA indications / 禁用 IMSA 指示
-	DisableVOICEInd bool        // Disable VOICE indications / 禁用 VOICE 指示
+	Device                     ModemDevice // Modem device info / Modem 设备信息
+	APN                        string      // APN (Access Point Name) / APN（接入点名称）
+	Username                   string      // Authentication username / 认证用户名
+	Password                   string      // Authentication password / 认证密码
+	AuthType                   uint8       // 0=none, 1=PAP, 2=CHAP, 3=PAP|CHAP / 认证类型
+	EnableIPv4                 bool        // Enable IPv4 / 启用 IPv4
+	EnableIPv6                 bool        // Enable IPv6 / 启用 IPv6
+	PINCode                    string      // SIM PIN code / SIM 卡 PIN 码
+	AutoReconnect              bool        // Automatically reconnect on disconnect / 断开后自动重连
+	NoRoute                    bool        // Don't add default route (useful for debugging) / 不添加默认路由 (用于调试)
+	NoDNS                      bool        // Don't configure DNS (useful for debugging) / 不配置DNS (用于调试)
+	DisableWMSInd              bool        // Disable WMS indications (Event Report) / 禁用 WMS 指示 (事件报告)
+	DisableUIMAtStart          bool        // Skip UIM allocation during core startup; callers may use an auxiliary AT UICC transport
+	SerializeServiceAllocation bool        // Allocate service client IDs sequentially for firmware that cannot handle concurrent CTL requests
+	DisableIMSAInd             bool        // Disable IMSA indications / 禁用 IMSA 指示
+	DisableVOICEInd            bool        // Disable VOICE indications / 禁用 VOICE 指示
 
 	ProfileIndex uint8 // PDN Profile 索引 (对应 -n 参数, 默认 0 表示使用模组默认 Profile)
 	MuxID        uint8 // QMAP Mux ID (对应 -m 参数, 默认 0 表示不启用多路复用)
@@ -308,6 +310,19 @@ type Manager struct {
 
 	// 设备状态快照（由 NAS Indication 事件驱动，供上层零 IPC 读取）
 	snapshot DeviceSnapshot
+}
+
+// SetDataConfig updates the parameters used by the next WDS data call. Callers
+// should disconnect an existing bearer before changing these values.
+func (m *Manager) SetDataConfig(apn string, enableIPv4, enableIPv6 bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.cfg.APN = strings.TrimSpace(apn)
+	m.cfg.EnableIPv4 = enableIPv4
+	m.cfg.EnableIPv6 = enableIPv6
+	m.mu.Unlock()
 }
 
 // internalEvent represents an internal event for the manager's event loop. / internalEvent 表示管理器事件循环的内部事件。
@@ -2371,6 +2386,24 @@ func (m *Manager) runStartupServiceTasks(ctx context.Context, fatal bool, tasks 
 	return nil
 }
 
+func (m *Manager) runStartupServiceTasksSequential(ctx context.Context, fatal bool, tasks []startupServiceTask) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, task := range tasks {
+		if err := ctx.Err(); err != nil {
+			if fatal {
+				return err
+			}
+			return nil
+		}
+		if err := task.run(ctx); err != nil && fatal {
+			return err
+		}
+	}
+	return nil
+}
+
 // hasQMIService 检查底层 Client 是否声明支持该服务。
 // 仅在 client 初始化完成后调用有效。
 func (m *Manager) hasQMIService(service uint8) bool {
@@ -2420,7 +2453,10 @@ func (m *Manager) allocateServices(ctx context.Context) error {
 					EventReportSignalThresholds: []int8{-60, -85},
 				}); err != nil {
 					m.log.WithError(err).Warn("Failed to register NAS indications")
-					return fmt.Errorf("failed to register NAS indications: %w", err)
+					// Some converted modem firmware exposes NAS but rejects one or more
+					// extended indication flags. Polling remains available, so keep the
+					// core alive instead of discarding healthy DMS/NAS clients.
+					return nil
 				}
 				return nil
 			},
@@ -2442,6 +2478,10 @@ func (m *Manager) allocateServices(ctx context.Context) error {
 		},
 		{
 			run: func(taskCtx context.Context) error {
+				if m.cfg.DisableUIMAtStart {
+					m.log.Debug("Skipping UIM client allocation at startup")
+					return nil
+				}
 				m.log.Debug("Allocating UIM client...")
 				uim, err := m.createUIMService(taskCtx)
 				if err != nil {
@@ -2465,7 +2505,19 @@ func (m *Manager) allocateServices(ctx context.Context) error {
 			},
 		},
 	}
-	if err := m.runStartupServiceTasks(ctx, true, coreTasks); err != nil {
+	runTasks := m.runStartupServiceTasks
+	coreTasksToRun := coreTasks
+	if m.cfg.SerializeServiceAllocation {
+		runTasks = m.runStartupServiceTasksSequential
+		// DMS is the identity and health baseline. Establish it before NAS,
+		// whose extended indication registration is less widely supported.
+		if len(coreTasks) >= 2 {
+			coreTasksToRun = make([]startupServiceTask, 0, len(coreTasks))
+			coreTasksToRun = append(coreTasksToRun, coreTasks[1], coreTasks[0])
+			coreTasksToRun = append(coreTasksToRun, coreTasks[2:]...)
+		}
+	}
+	if err := runTasks(ctx, true, coreTasksToRun); err != nil {
 		return err
 	}
 
@@ -2525,7 +2577,7 @@ func (m *Manager) allocateServices(ctx context.Context) error {
 			},
 		},
 	}
-	_ = m.runStartupServiceTasks(ctx, false, auxTasks)
+	_ = runTasks(ctx, false, auxTasks)
 
 	// IMS/IMSA/IMSP
 	// 当前设备族在这些服务上经常返回 CTL client-id 分配失败（如 0x001f），

@@ -344,7 +344,6 @@ func (p *Pool) runPostSwitchConvergence(deviceID string, token uint64, worker *W
 				"switch_token", token,
 				"target_iccid", snapshot.TargetICCID,
 				"reinit_window", reinitWindow.String())
-			p.resolveAndApplyPolicy(worker, "esim_switched")
 			return postSwitchConvergenceResult{Ready: true, Reason: "ready"}
 		case reinitTimeout:
 			if power, ok := reloader.(postSwitchSIMPowerController); ok {
@@ -382,8 +381,5 @@ func (p *Pool) runPostSwitchConvergence(deviceID string, token uint64, worker *W
 		"degraded", result.Degraded,
 		"reason", result.Reason,
 		"slot", result.Slot)
-	if result.Ready {
-		p.resolveAndApplyPolicy(worker, "esim_switched")
-	}
 	return result
 }

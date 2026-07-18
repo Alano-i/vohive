@@ -84,6 +84,14 @@ func TestDeviceConfigFromDTOWithBasePreservesOmittedQMIProxyFields(t *testing.T)
 	}
 }
 
+func TestDeviceConfigFromDTOWithBasePreservesConfirmedESIMCapability(t *testing.T) {
+	base := config.DeviceConfig{ID: "dev-esim", ESIMEnabled: true}
+	cfg := deviceConfigFromDTOWithBase(deviceConfigDTO{ID: "dev-esim", ESIMEnabled: false}, &base)
+	if !cfg.ESIMEnabled {
+		t.Fatal("confirmed eSIM capability must not be cleared by a config update")
+	}
+}
+
 func TestDeviceConfigFromDTOWithBaseAppliesExplicitQMIProxyFields(t *testing.T) {
 	base := config.DeviceConfig{
 		ID:                 "dev-qmi",

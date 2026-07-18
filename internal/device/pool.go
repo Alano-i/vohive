@@ -127,6 +127,7 @@ type Worker struct {
 	ipRefreshMu       sync.Mutex
 	ipRefreshInFlight bool
 	ipRefreshLast     time.Time
+	ipCacheGeneration atomic.Uint64
 
 	qmiRegistrationMu       sync.Mutex
 	qmiRegistrationInFlight bool
@@ -1156,6 +1157,31 @@ func (p *Pool) refreshIdentityAndApplyCardPolicy(worker *Worker, reason string) 
 	return result, identityErr
 }
 
+// prewarmActiveESIMProfileName fills the lightweight profile cache used by
+// device titles, so opening the eSIM tab is not required to discover the name.
+func (p *Pool) prewarmActiveESIMProfileName(worker *Worker, reason string) {
+	if p == nil || worker == nil || worker.EsimMgr == nil || !worker.Config.ESIMEnabled {
+		return
+	}
+	if err := p.EnsureESIMRuntime(worker.ID, "profile_name_prewarm"); err != nil {
+		logger.Warn("eSIM Profile 名称预热前恢复 AT 运行时失败", "device", worker.ID, "reason", reason, "err", err)
+		return
+	}
+	worker = p.GetWorker(worker.ID)
+	if worker == nil || worker.EsimMgr == nil {
+		return
+	}
+	if name, err := worker.EsimMgr.ActiveProfileName(); err == nil && strings.TrimSpace(name) != "" {
+		return
+	}
+	if err := worker.EsimMgr.RefreshProfiles(); err != nil {
+		logger.Warn("eSIM Profile 名称预热失败", "device", worker.ID, "reason", reason, "err", err)
+		return
+	}
+	logger.Info("eSIM Profile 名称预热完成", "device", worker.ID, "reason", reason)
+	p.broadcastVoWiFiStateChange(worker.ID)
+}
+
 func (p *Pool) applyNetworkPreference(worker *Worker) error {
 	if worker == nil {
 		return fmt.Errorf("worker 不存在")
@@ -1903,6 +1929,17 @@ func (p *Pool) UpdateWorkerConfig(id string, cfg config.DeviceConfig, applyAll b
 	p.mu.Unlock()
 
 	p.resolveAndApplyPolicy(w, "config_update")
+	return true
+}
+
+func (p *Pool) MarkESIMEnabled(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w := p.workers[id]
+	if w == nil {
+		return false
+	}
+	w.Config.ESIMEnabled = true
 	return true
 }
 

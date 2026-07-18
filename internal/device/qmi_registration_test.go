@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
+	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	"github.com/iniwex5/vohive/internal/backend"
 	"github.com/iniwex5/vohive/internal/config"
 )
@@ -167,6 +167,32 @@ func TestEnsureQMIRegistrationRegistersWhenSearching(t *testing.T) {
 	}
 	if ctrl.registerCalls != 1 {
 		t.Fatalf("registerCalls=%d want 1", ctrl.registerCalls)
+	}
+}
+
+func TestEnsureQMIRegistrationRecoversWhenStatusRemainsUnregistered(t *testing.T) {
+	serving := make([]*backend.ServingSystem, 0, qmiRegistrationRadioCycleAfterTries+1)
+	for i := 0; i < qmiRegistrationRadioCycleAfterTries; i++ {
+		serving = append(serving, &backend.ServingSystem{RegStatus: 0, RegStatusText: "未注册"})
+	}
+	serving = append(serving, &backend.ServingSystem{RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true})
+	ctrl := &qmiRegistrationTestController{
+		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
+		servingSeq:  serving,
+	}
+
+	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
+		PollInterval: time.Nanosecond,
+		MaxAttempts:  qmiRegistrationRadioCycleAfterTries + 2,
+	})
+	if err != nil {
+		t.Fatalf("ensureQMIRegistration() error = %v", err)
+	}
+	if ctrl.forceNetworkSearchCalls != 1 {
+		t.Fatalf("forceNetworkSearchCalls=%d want 1", ctrl.forceNetworkSearchCalls)
+	}
+	if got, want := ctrl.setModeCalls, []backend.OperatingMode{backend.ModeRFOff, backend.ModeOnline}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("setModeCalls=%v want %v", got, want)
 	}
 }
 
@@ -548,6 +574,10 @@ func TestQMIRegistrationTimeoutShorterWhenNotRequiredForData(t *testing.T) {
 
 	if qmiRegistrationTimeoutBestEffort >= qmiRegistrationTimeoutDataRequired {
 		t.Fatalf("best-effort timeout %v should be shorter than data-required timeout %v", qmiRegistrationTimeoutBestEffort, qmiRegistrationTimeoutDataRequired)
+	}
+	minimumRecoveryWindow := time.Duration(qmiRegistrationRadioCycleAfterTries)*2*time.Second + 2*time.Second
+	if qmiRegistrationTimeoutBestEffort < minimumRecoveryWindow {
+		t.Fatalf("best-effort timeout %v does not cover radio-cycle recovery window %v", qmiRegistrationTimeoutBestEffort, minimumRecoveryWindow)
 	}
 }
 

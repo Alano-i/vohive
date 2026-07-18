@@ -1365,6 +1365,7 @@ func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 			if groups, err := worker.EsimMgr.GetProfiles(); err == nil {
 				if len(groups) > 0 {
 					addESIMDeviceID(worker.ID)
+					s.rememberESIMCapability(worker.ID)
 				}
 				for _, group := range groups {
 					for _, profile := range group.Profiles {

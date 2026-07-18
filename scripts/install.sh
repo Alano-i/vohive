@@ -157,33 +157,43 @@ print_access_hint() {
 
 ensure_restart_always() {
 	service="/etc/systemd/system/${APP_NAME}.service"
+	changed=0
 	if ! command -v systemctl >/dev/null 2>&1 || [ ! -f "$service" ]; then
 		return
 	fi
 
-	if grep -q '^Restart=' "$service"; then
-		sed -i 's/^Restart=.*/Restart=always/' "$service"
-	else
-		tmp="${service}.tmp"
-		awk '
-			{ print }
-			$0 == "ExecStart=/usr/local/bin/vohive -c /etc/vohive/config.yaml" {
-				print "Restart=always"
-			}
-		' "$service" > "$tmp"
-		mv "$tmp" "$service"
+	if ! grep -q '^Restart=always$' "$service"; then
+		changed=1
+		if grep -q '^Restart=' "$service"; then
+			sed -i 's/^Restart=.*/Restart=always/' "$service"
+		else
+			tmp="${service}.tmp"
+			awk '
+				{ print }
+				$0 == "ExecStart=/usr/local/bin/vohive -c /etc/vohive/config.yaml" {
+					print "Restart=always"
+				}
+			' "$service" > "$tmp"
+			mv "$tmp" "$service"
+		fi
 	fi
-	if ! grep -q '^Environment=VOHIVE_VOWIFI_ENABLE_SWU=' "$service"; then
-		tmp="${service}.tmp"
-		awk '
-			{ print }
-			$0 == "Environment=HOME=/var/lib/vohive" {
-				print "Environment=VOHIVE_VOWIFI_ENABLE_SWU=1"
-			}
-		' "$service" > "$tmp"
-		mv "$tmp" "$service"
-	else
-		sed -i 's/^Environment=VOHIVE_VOWIFI_ENABLE_SWU=.*/Environment=VOHIVE_VOWIFI_ENABLE_SWU=1/' "$service"
+	if ! grep -q '^Environment=VOHIVE_VOWIFI_ENABLE_SWU=1$' "$service"; then
+		changed=1
+		if grep -q '^Environment=VOHIVE_VOWIFI_ENABLE_SWU=' "$service"; then
+			sed -i 's/^Environment=VOHIVE_VOWIFI_ENABLE_SWU=.*/Environment=VOHIVE_VOWIFI_ENABLE_SWU=1/' "$service"
+		else
+			tmp="${service}.tmp"
+			awk '
+				{ print }
+				$0 == "Environment=HOME=/var/lib/vohive" {
+					print "Environment=VOHIVE_VOWIFI_ENABLE_SWU=1"
+				}
+			' "$service" > "$tmp"
+			mv "$tmp" "$service"
+		fi
+	fi
+	if [ "$changed" -eq 0 ]; then
+		return
 	fi
 	systemctl daemon-reload
 	systemctl restart "$APP_NAME"
@@ -217,7 +227,7 @@ main() {
 	download_installer "$VERSION" "$installer"
 	chmod 0755 "$installer"
 
-	sh "$installer" "$binary"
+	VOHIVE_SKIP_RUNTIME_PACKAGES=1 sh "$installer" "$binary"
 	ensure_restart_always
 	print_access_hint
 }

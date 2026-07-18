@@ -2,6 +2,7 @@
 import type { DeviceOverviewItem } from '../types/api'
 import { computed } from 'vue'
 import { ArrowSync24Regular, Power24Regular, Mail24Regular } from '@vicons/fluent'
+import { deviceDisplayName } from './deviceOverviewActiveEsim'
 
 const props = defineProps<{
   device: DeviceOverviewItem
@@ -36,7 +37,7 @@ const publicIPText = computed(() => {
             <img class="device-header-dji-logo" src="/dji.svg" alt="" />
           </div>
           <div class="min-w-0">
-            <div class="text-xl font-extrabold text-gray-900 dark:text-white truncate">{{ device.name || device.id }}</div>
+            <div class="text-xl font-extrabold text-gray-900 dark:text-white truncate">{{ deviceDisplayName(device) }}</div>
             <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
               <span class="font-mono cursor-pointer hover:underline" @click="emit('copy-text', device.id)">{{ device.id }}</span>
               · 公网 IP:

@@ -160,12 +160,12 @@ func (t *Socks5Transport) Stop() {
 
 // SendIKE 通过 Socks5 UDP Relay 发送 IKE 包
 func (t *Socks5Transport) SendIKE(data []byte) error {
-	return t.sendUDP(data)
+	return t.sendUDP(data, true)
 }
 
 // SendESP 通过 Socks5 UDP Relay 发送 ESP 包
 func (t *Socks5Transport) SendESP(data []byte) error {
-	return t.sendUDP(data)
+	return t.sendUDP(data, false)
 }
 
 // IKEPackets 返回 IKE 数据接收通道
@@ -230,13 +230,18 @@ func (t *Socks5Transport) RemoteAddrString() string {
 }
 
 // sendUDP 构造 Socks5 UDP Datagram 并通过 Relay 转发
-func (t *Socks5Transport) sendUDP(data []byte) error {
+func (t *Socks5Transport) sendUDP(data []byte, ike bool) error {
 	t.remoteMu.RLock()
 	dst := &net.UDPAddr{IP: t.remoteIP, Port: t.remotePort}
 	t.remoteMu.RUnlock()
 
+	payload := data
+	if ike && dst.Port == 4500 {
+		payload = addNonESPMarker(data)
+	}
+
 	// 封装 Socks5 UDP Header + 原始数据
-	datagram := EncodeSocks5UDPDatagram(dst, data)
+	datagram := EncodeSocks5UDPDatagram(dst, payload)
 
 	_, err := t.udpConn.WriteToUDP(datagram, t.relayAddr)
 	if err != nil {
@@ -289,6 +294,7 @@ func (t *Socks5Transport) readLoop() {
 		if len(payload) == 0 {
 			continue
 		}
+		payload = stripNonESPMarker(payload)
 
 		// 根据包头判断是 IKE 还是 ESP
 		// IKE 包的第 17-20 字节（MessageID 之前）包含固定的 NextPayload + Version + Exchange + Flags
@@ -310,6 +316,19 @@ func (t *Socks5Transport) readLoop() {
 			}
 		}
 	}
+}
+
+func addNonESPMarker(data []byte) []byte {
+	packet := make([]byte, 4+len(data))
+	copy(packet[4:], data)
+	return packet
+}
+
+func stripNonESPMarker(data []byte) []byte {
+	if len(data) >= 24 && binary.BigEndian.Uint32(data[:4]) == 0 && data[21] == 0x20 {
+		return data[4:]
+	}
+	return data
 }
 
 // isIKEPacket 判断负载是否为 IKE 包

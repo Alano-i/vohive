@@ -461,6 +461,44 @@ func TestRequiresQMICoreFalseForPureAT(t *testing.T) {
 	}
 }
 
+func TestDeriveESIMTransportHonorsExplicitATForQMIBackend(t *testing.T) {
+	cfg := config.DeviceConfig{
+		DeviceBackend: "qmi",
+		ESIMTransport: config.ESIMTransportAT,
+	}
+
+	if got := deriveESIMTransport(cfg); got != config.ESIMTransportAT {
+		t.Fatalf("deriveESIMTransport() = %q, want %q", got, config.ESIMTransportAT)
+	}
+	if !requiresQMICore(cfg) {
+		t.Fatal("qmi 数据后端仍应启动 QMI Core")
+	}
+}
+
+func TestDeriveESIMTransportDefaultsToATForHybridQMIBackend(t *testing.T) {
+	cfg := config.DeviceConfig{
+		DeviceBackend: "qmi",
+		ATPort:        "/dev/ttyUSB10",
+	}
+
+	if got := deriveESIMTransport(cfg); got != config.ESIMTransportAT {
+		t.Fatalf("deriveESIMTransport() = %q, want %q", got, config.ESIMTransportAT)
+	}
+}
+
+func TestHybridQMIWorkerUsesATForStartupUICCCleanup(t *testing.T) {
+	w := &Worker{
+		Config: config.DeviceConfig{
+			DeviceBackend: "qmi",
+			ATPort:        "/dev/ttyUSB10",
+		},
+	}
+
+	if !workerUsesAuxATUICC(w) {
+		t.Fatal("hybrid QMI worker should skip startup QMI UIM cleanup")
+	}
+}
+
 func TestResolveDiscoveredCompatibleModemRequiresVerifiedATPortForIMEI(t *testing.T) {
 	orig := probeIMEICachedFn
 	defer func() { probeIMEICachedFn = orig }()

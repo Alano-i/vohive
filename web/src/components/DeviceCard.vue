@@ -18,7 +18,9 @@ const emit = defineEmits<{
   'open-device': [id: string]
 }>()
 
-const simMissing = computed(() => props.device.sim_inserted === false)
+// Dashboard snapshots use false as the zero value while QMI is unavailable.
+// Healthy confirms that the control plane actually observed an absent SIM.
+const simMissing = computed(() => props.device.healthy && props.device.sim_inserted === false)
 const deviceOnline = computed(() => props.device.healthy && !simMissing.value)
 const airplaneEnabled = computed(() => props.device.airplane_enabled === true)
 

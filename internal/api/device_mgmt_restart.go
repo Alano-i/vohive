@@ -1,6 +1,43 @@
 package api
 
-import "github.com/iniwex5/vohive/internal/config"
+import (
+	"github.com/iniwex5/vohive/internal/backend"
+	"github.com/iniwex5/vohive/internal/config"
+)
+
+func canHotSwitchDeviceBackend(old config.DeviceConfig, next config.DeviceConfig) bool {
+	oldMode := backend.NormalizeBackendMode(old.DeviceBackend)
+	nextMode := backend.NormalizeBackendMode(next.DeviceBackend)
+	if oldMode == nextMode {
+		return false
+	}
+	if (oldMode != backend.BackendAT && oldMode != backend.BackendQMI) ||
+		(nextMode != backend.BackendAT && nextMode != backend.BackendQMI) {
+		return false
+	}
+
+	// USB/interface/control/AT paths are runtime discoveries anchored by IMEI
+	// and are deliberately omitted from the slim persisted config. They can be
+	// present in the browser's DTO while absent from old, without representing
+	// a hardware binding change.
+	if config.NormalizeIMEI(old.ModemIMEI) != config.NormalizeIMEI(next.ModemIMEI) {
+		return false
+	}
+	if old.ProxyPort != next.ProxyPort || qmiProxyConfigChanged(old, next) {
+		return false
+	}
+	if config.NormalizeESIMTransport(old.ESIMTransport) != config.NormalizeESIMTransport(next.ESIMTransport) {
+		return false
+	}
+	if old.BaudRate != next.BaudRate || old.DataBits != next.DataBits ||
+		old.StopBits != next.StopBits || old.Parity != next.Parity {
+		return false
+	}
+	if old.APN != next.APN || old.IPVersion != next.IPVersion {
+		return false
+	}
+	return true
+}
 
 func deviceConfigRequiresRestart(old config.DeviceConfig, next config.DeviceConfig) bool {
 	if config.NormalizeIMEI(old.ModemIMEI) != config.NormalizeIMEI(next.ModemIMEI) {

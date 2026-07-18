@@ -147,15 +147,24 @@ func (m *Manager) detectTimeoutStorm(service string) {
 	const stormWindow = 5 * time.Second
 	const stormMinSvcs = 2
 	const stormCooldown = 30 * time.Second
+	const coreStartupGrace = 15 * time.Second
+
+	now := time.Now()
+	m.mu.RLock()
+	coreReady := m.coreReady
+	coreReadySince := m.coreReadySince
+	m.mu.RUnlock()
+	if coreReady && !coreReadySince.IsZero() && now.Sub(coreReadySince) < coreStartupGrace {
+		return
+	}
 
 	m.globalTimeoutMu.Lock()
 	defer m.globalTimeoutMu.Unlock()
 
-	now := time.Now()
 	if m.globalTimeoutServices == nil {
 		m.globalTimeoutServices = make(map[string]time.Time)
 	}
-	
+
 	for svc, t := range m.globalTimeoutServices {
 		if now.Sub(t) > stormWindow {
 			delete(m.globalTimeoutServices, svc)
@@ -165,10 +174,11 @@ func (m *Manager) detectTimeoutStorm(service string) {
 
 	if len(m.globalTimeoutServices) >= stormMinSvcs {
 		if m.globalTimeoutStormAt.IsZero() || now.Sub(m.globalTimeoutStormAt) > stormCooldown {
+			servicesAffected := len(m.globalTimeoutServices)
 			m.globalTimeoutStormAt = now
 			m.globalTimeoutServices = make(map[string]time.Time)
 			m.log.Warn("Timeout storm detected; triggering immediate core recovery",
-				"services_affected", len(m.globalTimeoutServices))
+				"services_affected", servicesAffected)
 			m.enqueueModemResetEvent("timeout_storm")
 		}
 	}

@@ -52,6 +52,11 @@ func UpdateDeviceInFile(path string, deviceID string, newDevice DeviceConfig) er
 		} else {
 			deleteMapKey(n, "qmi_proxy_executable")
 		}
+		if newDevice.ESIMEnabled {
+			setMapBool(n, "esim_enabled", true)
+		} else {
+			deleteMapKey(n, "esim_enabled")
+		}
 
 		if newDevice.ProxyPort > 0 {
 			setMapInt(n, "proxy_port", newDevice.ProxyPort)

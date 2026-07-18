@@ -100,6 +100,14 @@ func TestOverviewStreamEmitVersionTracksRuntimeBusinessState(t *testing.T) {
 	}
 }
 
+func TestOverviewStreamEmitVersionTracksActiveESIMProfileName(t *testing.T) {
+	before := newOverviewStreamEmitVersion(deviceMgmtOverviewLiteItem{})
+	after := newOverviewStreamEmitVersion(deviceMgmtOverviewLiteItem{ActiveESIMProfileName: "ClubSim"})
+	if shouldSkipOverviewStatePush(&before, after) {
+		t.Fatal("active eSIM profile name change must trigger overview stream push")
+	}
+}
+
 func TestOverviewDetailLiveRefreshRequestedDefaultsToCache(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

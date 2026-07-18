@@ -836,21 +836,26 @@ func New(cfg config.DeviceConfig, modemDev *qmimanager.ModemDevice) *Manager {
 
 func buildQMIManagerConfig(cfg config.DeviceConfig, device qmimanager.ModemDevice) qmimanager.Config {
 	isQMIBackend := strings.ToLower(strings.TrimSpace(cfg.DeviceBackend)) == "qmi"
+	hasAuxATPort := strings.TrimSpace(cfg.ATPort) != "" || strings.TrimSpace(cfg.ManagePort) != ""
+	esimTransport := strings.ToLower(strings.TrimSpace(cfg.ESIMTransport))
+	useATUICC := hasAuxATPort && esimTransport != config.ESIMTransportQMI && esimTransport != config.ESIMTransportMBIM
 	enableV4, enableV6, err := config.ResolveIPFamily(cfg.IPVersion)
 	if err != nil {
 		enableV4, enableV6 = true, false
 	}
 	return qmimanager.Config{
-		Device:          device,
-		APN:             cfg.APN,
-		EnableIPv4:      enableV4,
-		EnableIPv6:      enableV6,
-		AutoReconnect:   true,
-		NoRoute:         false,         // 关键: 允许添加默认路由 (但在底层库中设置了高 Metric=512)
-		NoDNS:           true,          // 关键: 不修改系统 DNS
-		DisableWMSInd:   !isQMIBackend, // 如果是纯 QMI 模式，解禁 QMI WMS 以支持接收短信；否则（AT或Auto）禁用，以防与 AT URC 冲突
-		NoDial:          true,          // 数据面统一走显式 Connect()/Disconnect()，禁止底层自动拨号
-		DataPlanePolicy: qmimanager.DataPlanePolicyLazy,
+		Device:                     device,
+		APN:                        cfg.APN,
+		EnableIPv4:                 enableV4,
+		EnableIPv6:                 enableV6,
+		AutoReconnect:              true,
+		NoRoute:                    false,         // 关键: 允许添加默认路由 (但在底层库中设置了高 Metric=512)
+		NoDNS:                      true,          // 关键: 不修改系统 DNS
+		DisableWMSInd:              !isQMIBackend, // 如果是纯 QMI 模式，解禁 QMI WMS 以支持接收短信；否则（AT或Auto）禁用，以防与 AT URC 冲突
+		DisableUIMAtStart:          isQMIBackend && useATUICC,
+		SerializeServiceAllocation: isQMIBackend && hasAuxATPort,
+		NoDial:                     true, // 数据面统一走显式 Connect()/Disconnect()，禁止底层自动拨号
+		DataPlanePolicy:            qmimanager.DataPlanePolicyLazy,
 		Timeouts: qmimanager.TimeoutConfig{
 			Init:               10 * time.Second,
 			Dial:               30 * time.Second,
@@ -879,6 +884,34 @@ func buildQMIManagerConfig(cfg config.DeviceConfig, device qmimanager.ModemDevic
 		},
 		ClientOptions: ClientOptionsFromDeviceConfig(cfg),
 	}
+}
+
+// SetDataConfig synchronizes per-SIM APN/IP preferences into the live QMI
+// manager. The next Connect call will use these values without rebuilding the
+// control plane.
+func (m *Manager) SetDataConfig(apn, ipVersion string) error {
+	if m == nil || m.qmiMgr == nil {
+		return fmt.Errorf("qmi_manager_not_available")
+	}
+	enableV4, enableV6, err := config.ResolveIPFamily(ipVersion)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.cfg.APN = strings.TrimSpace(apn)
+	m.cfg.IPVersion = strings.TrimSpace(ipVersion)
+	m.mu.Unlock()
+	m.qmiMgr.SetDataConfig(apn, enableV4, enableV6)
+	return nil
+}
+
+func (m *Manager) dataIPVersion() string {
+	if m == nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg.IPVersion
 }
 
 func (m *Manager) SetOnConnect(handler func()) {
@@ -1040,7 +1073,7 @@ func (m *Manager) lookupPublicIPHost(ctx context.Context, host string) ([]string
 	lookupCtx, cancel := context.WithTimeout(ctx, publicIPResolveTimeout)
 	defer cancel()
 
-	enableV4, enableV6, err := config.ResolveIPFamily(m.cfg.IPVersion)
+	enableV4, enableV6, err := config.ResolveIPFamily(m.dataIPVersion())
 	if err != nil {
 		enableV4, enableV6 = true, false
 	}
@@ -2328,7 +2361,7 @@ func (m *Manager) GetPublicIPNoCache() string {
 // 避免双栈模式下两个族共用一次探测时被其中一族（通常是更快建联的 v6）持续抢跑，
 // 导致另一族的公网地址永远拿不到、缓存与数据库字段无法刷新。
 func (m *Manager) GetPublicIPv4AndV6NoCache() (publicV4 string, publicV6 string) {
-	enableV4, enableV6, err := config.ResolveIPFamily(m.cfg.IPVersion)
+	enableV4, enableV6, err := config.ResolveIPFamily(m.dataIPVersion())
 	if err != nil {
 		enableV4, enableV6 = true, false
 	}

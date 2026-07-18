@@ -300,6 +300,9 @@ func (p *Pool) healthCheckLoop() {
 						}
 						_ = worker.RefreshRuntime(nil, "health_sync")
 						p.PersistRuntimeState(worker)
+						if worker.Config.ESIMEnabled && worker.CurrentICCID() != "" {
+							p.prewarmActiveESIMProfileName(worker, "health_sync")
+						}
 						close(done)
 					}()
 
@@ -479,11 +482,31 @@ func (w *Worker) PreWarmCache() {
 }
 
 func (w *Worker) clearCachedIP() {
+	w.ipCacheGeneration.Add(1)
 	w.cacheMu.Lock()
 	w.cachedIP = ""
 	w.cachedPublicIPv6 = ""
 	w.cacheTime = time.Time{}
 	w.cacheMu.Unlock()
+}
+
+func (w *Worker) prepareIPCacheForSIMSwitch() {
+	if w == nil {
+		return
+	}
+	w.clearCachedIP()
+
+	w.publicIPRetryMu.Lock()
+	w.publicIPRetryCount = 0
+	if w.publicIPRetryTimer != nil {
+		w.publicIPRetryTimer.Stop()
+		w.publicIPRetryTimer = nil
+	}
+	w.publicIPRetryMu.Unlock()
+
+	w.ipRefreshMu.Lock()
+	w.ipRefreshLast = time.Time{}
+	w.ipRefreshMu.Unlock()
 }
 
 func (w *Worker) NetworkConnected() bool {
@@ -527,6 +550,7 @@ func (p *Pool) refreshIPs(worker *Worker, checkPublic bool) {
 	}
 	worker.ipRefreshInFlight = true
 	worker.ipRefreshLast = now
+	cacheGeneration := worker.ipCacheGeneration.Load()
 	worker.ipRefreshMu.Unlock()
 
 	go func() {
@@ -541,6 +565,13 @@ func (p *Pool) refreshIPs(worker *Worker, checkPublic bool) {
 
 		if checkPublic {
 			publicV4, publicV6 := nc.GetPublicIPv4AndV6NoCache()
+			if worker.ipCacheGeneration.Load() != cacheGeneration {
+				logger.Debug("忽略 SIM 切换前启动的过期公网 IP 探测",
+					"device", worker.ID,
+					"probe_generation", cacheGeneration,
+					"current_generation", worker.ipCacheGeneration.Load())
+				return
+			}
 
 			worker.cacheMu.Lock()
 			oldIP := worker.cachedIP

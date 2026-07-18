@@ -507,7 +507,7 @@ func TestHandleESIMSwitchAfterSubmitsSwitchEndThroughLifecycleController(t *test
 	}
 }
 
-func TestHandleESIMSwitchAfterRadioCycleOnlineThenSnapshotRestore(t *testing.T) {
+func TestHandleESIMSwitchAfterRadioCycleDoesNotRestoreOldFlightSnapshot(t *testing.T) {
 	p := NewPool(&config.Config{})
 	be := &esimSwitchRestoreBackendStub{
 		mode:      backend.BackendQMI,
@@ -534,7 +534,7 @@ func TestHandleESIMSwitchAfterRadioCycleOnlineThenSnapshotRestore(t *testing.T) 
 
 	p.handleESIMSwitchAfter("dev-1", 0)
 
-	want := []backend.OperatingMode{backend.ModeOnline, backend.ModeRFOff}
+	want := []backend.OperatingMode{backend.ModeOnline}
 	if !reflect.DeepEqual(be.setCalls, want) {
 		t.Fatalf("setCalls=%v want %v", be.setCalls, want)
 	}
@@ -821,11 +821,12 @@ func TestHandleESIMSwitchAfterBlocksVoWiFiWhenSIMAuthStillNotReady(t *testing.T)
 
 	p.handleESIMSwitchAfter("dev-1", 0)
 
-	if len(got) != 0 {
-		t.Fatalf("unexpected lifecycle commands when SIMAuth is not ready: %v", got)
+	wantCommands := []string{"switch_end:dev-1"}
+	if !reflect.DeepEqual(got, wantCommands) {
+		t.Fatalf("lifecycle commands=%v want %v", got, wantCommands)
 	}
-	if len(be.setCalls) != 1 || be.setCalls[0] != backend.ModeOnline {
-		t.Fatalf("setCalls=%v want [%v]", be.setCalls, backend.ModeOnline)
+	if len(be.setCalls) != 0 {
+		t.Fatalf("setCalls=%v want none", be.setCalls)
 	}
 	if len(be.resolveSIMAuthApps) != 3 {
 		t.Fatalf("resolveSIMAuthApps len=%d want 3", len(be.resolveSIMAuthApps))
@@ -977,7 +978,7 @@ func TestSchedulePostSwitchIdentityRefreshesLoadsOperatorMetadataForReadyIdentit
 	p.schedulePostSwitchIdentityRefreshes("dev-1", esimSwitchContext{
 		TargetICCID:        "target-iccid",
 		IdentityGeneration: 7,
-	})
+	}, false)
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -1017,7 +1018,7 @@ func TestHandleESIMSwitchAfterVoWiFiUsesCurrentSwitch(t *testing.T) {
 	}
 }
 
-func TestHandleESIMSwitchAfterKeepsFlightWhenVoWiFiSwitchOff(t *testing.T) {
+func TestHandleESIMSwitchAfterDoesNotRestoreOldFlightSnapshot(t *testing.T) {
 	p := NewPool(&config.Config{})
 	be := &esimSwitchRestoreBackendStub{mode: backend.BackendQMI, getMode: backend.ModeOnline, liveICCID: "460001234567890", liveIMSI: "460001234567890"}
 	w := &Worker{
@@ -1032,12 +1033,12 @@ func TestHandleESIMSwitchAfterKeepsFlightWhenVoWiFiSwitchOff(t *testing.T) {
 
 	p.handleESIMSwitchAfter("dev-1", 0)
 
-	if len(be.setCalls) != 1 || be.setCalls[0] != backend.ModeRFOff {
-		t.Fatalf("setCalls=%v want [%v]", be.setCalls, backend.ModeRFOff)
+	if len(be.setCalls) != 0 {
+		t.Fatalf("setCalls=%v want none", be.setCalls)
 	}
 }
 
-func TestHandleESIMSwitchAfterRestoresOnlineWhenVoWiFiSwitchOff(t *testing.T) {
+func TestHandleESIMSwitchAfterKeepsTargetRuntimeWhenAlreadyOnline(t *testing.T) {
 	p := NewPool(&config.Config{})
 	be := &esimSwitchRestoreBackendStub{mode: backend.BackendQMI, getMode: backend.ModeOnline, liveICCID: "460001234567890", liveIMSI: "460001234567890"}
 	w := &Worker{
@@ -1052,8 +1053,99 @@ func TestHandleESIMSwitchAfterRestoresOnlineWhenVoWiFiSwitchOff(t *testing.T) {
 
 	p.handleESIMSwitchAfter("dev-1", 0)
 
-	if len(be.setCalls) != 1 || be.setCalls[0] != backend.ModeOnline {
-		t.Fatalf("setCalls=%v want [%v]", be.setCalls, backend.ModeOnline)
+	if len(be.setCalls) != 0 {
+		t.Fatalf("setCalls=%v want none", be.setCalls)
+	}
+}
+
+func TestHandleESIMSwitchAfterUsesTargetPolicyInsteadOfOldNetworkSnapshot(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	p.SetPolicyResolver(&stubPolicyResolver{pol: cardpolicy.Policy{
+		ICCID: "target-iccid", NetworkEnabled: false, IPVersion: "v4", APN: "target.apn",
+	}})
+	be := &esimSwitchRestoreBackendStub{
+		mode: backend.BackendQMI, getMode: backend.ModeOnline,
+		liveICCID: "target-iccid", liveIMSI: "target-imsi",
+	}
+	network := &fakeController{connected: true}
+	w := &Worker{
+		ID: "dev-1", Config: config.DeviceConfig{ID: "dev-1", NetworkEnabled: true, APN: "old.apn"},
+		Backend: be, netOverride: network,
+	}
+	p.workers["dev-1"] = w
+	withSwitchSnapshot(p, "dev-1", esimSwitchContext{
+		TargetICCID: "target-iccid", QMIConnectedBefore: true, NetworkEnabledBefore: true,
+	})
+
+	p.handleESIMSwitchAfter("dev-1", 0)
+
+	if network.connected {
+		t.Fatal("target policy disables network; old connected snapshot must not reconnect it")
+	}
+	if w.Config.NetworkEnabled {
+		t.Fatal("target network policy was not projected")
+	}
+	if w.Config.APN != "target.apn" {
+		t.Fatalf("APN=%q want target.apn", w.Config.APN)
+	}
+}
+
+func TestHandleESIMSwitchAfterConnectsUsingTargetProfilePolicy(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	p.SetPolicyResolver(&stubPolicyResolver{pol: cardpolicy.Policy{
+		ICCID: "target-iccid", NetworkEnabled: true, IPVersion: "v4v6", APN: "club.apn",
+	}})
+	be := &esimSwitchRestoreBackendStub{
+		mode: backend.BackendQMI, getMode: backend.ModeOnline,
+		liveICCID: "target-iccid", liveIMSI: "target-imsi",
+	}
+	network := &fakeController{}
+	w := &Worker{
+		ID: "dev-1", Config: config.DeviceConfig{ID: "dev-1", NetworkEnabled: false, APN: "old.apn"},
+		Backend: be, netOverride: network,
+	}
+	p.workers["dev-1"] = w
+	withSwitchSnapshot(p, "dev-1", esimSwitchContext{
+		TargetICCID: "target-iccid", QMIConnectedBefore: false, NetworkEnabledBefore: false,
+	})
+
+	p.handleESIMSwitchAfter("dev-1", 0)
+
+	if !network.connected {
+		t.Fatal("target policy enables network; old disabled snapshot must not keep it off")
+	}
+	if !w.Config.NetworkEnabled || w.Config.IPVersion != "v4v6" || w.Config.APN != "club.apn" {
+		t.Fatalf("target network policy not projected: %+v", w.Config)
+	}
+}
+
+func TestHandleESIMSwitchAfterUsesTargetAirplanePolicy(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	p.SetPolicyResolver(&stubPolicyResolver{pol: cardpolicy.Policy{
+		ICCID: "target-iccid", AirplaneEnabled: true, NetworkEnabled: true,
+	}})
+	be := &esimSwitchRestoreBackendStub{
+		mode: backend.BackendQMI, getMode: backend.ModeOnline,
+		liveICCID: "target-iccid", liveIMSI: "target-imsi",
+	}
+	network := &fakeController{connected: true}
+	w := &Worker{ID: "dev-1", Config: config.DeviceConfig{ID: "dev-1"}, Backend: be, netOverride: network}
+	p.workers["dev-1"] = w
+	withSwitchSnapshot(p, "dev-1", esimSwitchContext{TargetICCID: "target-iccid", FlightModeBefore: false})
+
+	p.handleESIMSwitchAfter("dev-1", 0)
+
+	if network.connected {
+		t.Fatal("target airplane policy must stop the data session")
+	}
+	if len(be.setCalls) != 1 || be.setCalls[0] != backend.ModeRFOff {
+		t.Fatalf("setCalls=%v want [%v]", be.setCalls, backend.ModeRFOff)
+	}
+	if !w.Config.AirplaneEnabled || w.Config.NetworkEnabled {
+		t.Fatalf("target airplane policy not projected: %+v", w.Config)
 	}
 }
 
@@ -1180,8 +1272,11 @@ func TestHandleESIMSwitchAfterStrictICCIDGateDoesNotScheduleDeferredRecover(t *t
 
 	select {
 	case cmd := <-commands:
-		t.Fatalf("unexpected deferred recover command after identity gate failure: %s", cmd.Kind.String())
+		if cmd.Kind != vowifihost.LifecycleCommandSwitchEnd || cmd.RestoreRadio {
+			t.Fatalf("unexpected command after identity gate failure: %+v", cmd)
+		}
 	case <-time.After(100 * time.Millisecond):
+		t.Fatal("safe-state switch_end command was not submitted")
 	}
 }
 

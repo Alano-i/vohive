@@ -4,6 +4,7 @@ import EmptyState from './EmptyState.vue'
 import type { DeviceMgmtListItem } from '../types/api'
 import { isControlOnline, isRadioRegistered, isSIMMissing, lifecycleStatusLabel, primaryLifecycleStatus } from '../utils/deviceLifecycle'
 import { formatNetworkMode } from '../utils/networkMode'
+import { deviceDisplayName } from './deviceOverviewActiveEsim'
 
 const props = defineProps<{
   query: string
@@ -45,14 +46,6 @@ const modelSortDir = computed({
 })
 
 const primaryStatus = primaryLifecycleStatus
-
-const deviceDisplayName = (d: DeviceMgmtListItem) => {
-  const base = String(d?.name || d?.id || '').trim()
-  const esimName = String(d?.active_esim_profile_name || '').trim()
-  if (!esimName) return base
-  if (!base) return esimName
-  return `${base} · ${esimName}`
-}
 
 const statusTagClass = (tone: ReturnType<typeof primaryLifecycleStatus>['tone']) => {
   switch (tone) {

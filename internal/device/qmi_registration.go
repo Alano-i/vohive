@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
-	qmipkg "github.com/iniwex5/vohive/internal/qmi"
+	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	"github.com/iniwex5/vohive/internal/backend"
 	"github.com/iniwex5/vohive/internal/config"
+	qmipkg "github.com/iniwex5/vohive/internal/qmi"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
@@ -28,9 +28,9 @@ const (
 	// qmiRegistrationTimeoutDataRequired 用于数据网络必须就绪的协调路径（如 StartNetwork），
 	// DMS/NAS 偶发卡顿时仍要尽量等到驻网完成。
 	qmiRegistrationTimeoutDataRequired = 90 * time.Second
-	// qmiRegistrationTimeoutBestEffort 用于后台尽力而为的协调路径（网络未开启时的驻网保活、
-	// 运营商切换等），避免 DMS 卡死时长时间占用 goroutine 并制造无意义的超时日志噪音。
-	qmiRegistrationTimeoutBestEffort = 20 * time.Second
+	// qmiRegistrationTimeoutBestEffort 用于网络未开启时的驻网保活。该窗口必须覆盖
+	// qmiRegistrationRadioCycleAfterTries，否则切卡后长期未注册的模组永远走不到 radio cycle。
+	qmiRegistrationTimeoutBestEffort = 75 * time.Second
 )
 
 func qmiRegistrationTimeout(requiredForData bool) time.Duration {
@@ -136,6 +136,7 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 			return fmt.Errorf("读取 QMI serving system 返回空结果")
 		}
 
+		needsRegistrationRecovery := false
 		switch ss.RegStatus {
 		case 1, 5:
 			if ss.PSAttached {
@@ -150,6 +151,7 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 				attachIssued = true
 			}
 		case 2:
+			needsRegistrationRecovery = true
 			if !registerIssued {
 				logger.Info("QMI 正在搜网，发起 NAS 注册唤醒", "device", deviceID, "attempt", attempt)
 				if err := initiateQMIRegistration(ctx, deviceID, cfg, ctrl); err != nil {
@@ -157,10 +159,25 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 				}
 				registerIssued = true
 			}
-			// logger.Debug("QMI 正在搜网，等待驻网完成", "device", deviceID, "attempt", attempt)
+		case 3:
+			return fmt.Errorf("%w: %s", errQMIRegistrationDenied, ss.RegStatusText)
+		default:
+			needsRegistrationRecovery = true
+			if !registerIssued {
+				logger.Info("QMI 未驻网，发起 NAS 注册", "device", deviceID, "reg_status", ss.RegStatus)
+				if err := initiateQMIRegistration(ctx, deviceID, cfg, ctrl); err != nil {
+					return fmt.Errorf("QMI NAS 注册失败: %w", err)
+				}
+				registerIssued = true
+			}
+		}
+
+		// NAS 可能在切卡后从“搜索中(2)”退回“未注册(0)”。两种状态都必须继续
+		// 进入 force-search/radio-cycle 恢复链路，不能在 reg_status=0 时只空等。
+		if needsRegistrationRecovery {
 			if shouldForceNetworkSearchForQMIRegistration(attempt, registerIssued, forceNetworkSearchIssued, forceNetworkSearchUnsupported) {
 				forceNetworkSearchIssued = true
-				logger.Info("QMI 搜网持续未恢复，执行 NAS force network search", "device", deviceID, "attempt", attempt)
+				logger.Info("QMI 驻网持续未恢复，执行 NAS force network search", "device", deviceID, "attempt", attempt, "reg_status", ss.RegStatus)
 				if err := ctrl.NASForceNetworkSearch(ctx); err != nil {
 					if isUnsupportedQMIForceNetworkSearchError(err) {
 						forceNetworkSearchUnsupported = true
@@ -182,16 +199,6 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 						attachIssued = false
 					}
 				}
-			}
-		case 3:
-			return fmt.Errorf("%w: %s", errQMIRegistrationDenied, ss.RegStatusText)
-		default:
-			if !registerIssued {
-				logger.Info("QMI 未驻网，发起 NAS 注册", "device", deviceID, "reg_status", ss.RegStatus)
-				if err := initiateQMIRegistration(ctx, deviceID, cfg, ctrl); err != nil {
-					return fmt.Errorf("QMI NAS 注册失败: %w", err)
-				}
-				registerIssued = true
 			}
 		}
 

@@ -78,6 +78,9 @@ find_binary() {
 }
 
 install_runtime_packages() {
+	if [ "${VOHIVE_SKIP_RUNTIME_PACKAGES:-0}" = "1" ]; then
+		return
+	fi
 	if command -v apt-get >/dev/null 2>&1; then
 		apt-get update
 		DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates tzdata
