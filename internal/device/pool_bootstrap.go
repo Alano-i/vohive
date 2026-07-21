@@ -346,7 +346,14 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 		devCfg = applyQMIManagedAttachment(devCfg, *matched)
 	}
 
-	m, err := modem.New(devCfg)
+	modemCfg := devCfg
+	if workerNeedsATRuntime(devCfg) {
+		// The modem manager is the auxiliary AT runtime even when QMI remains the
+		// worker's primary backend. Keeping it alive from bootstrap avoids replacing
+		// the eSIM manager on the first profile read.
+		modemCfg.DeviceBackend = backend.BackendAT
+	}
+	m, err := modem.New(modemCfg)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Modem 失败: %w", err)
 	}
@@ -458,6 +465,10 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 	if qmiCore != nil {
 		var resetRecoveryRunning atomic.Bool
 		qmiCore.OnModemReset(func() {
+			if !p.isCurrentWorker(w) {
+				return
+			}
+			w.setCachedHealthy(false)
 			if p.lifecycle != nil {
 				p.lifecycle.BeginRecovery(w.ID, LifecyclePhaseRecovering, "qmi_modem_reset", qmiLifecycleRecoveryTTL)
 			}
@@ -501,6 +512,11 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 						logger.Debug("模组重置恢复：数据面已连接，跳过重建", "device", w.ID)
 						return
 					}
+					if p.IsESIMSwitching(w.ID) || w.SIMIdentitySuppressesOverviewIMSI() {
+						logger.Debug("模组重置恢复：SIM 身份仍在切换收敛，暂缓应用网络偏好",
+							"device", w.ID, "attempt", attempt)
+						continue
+					}
 					if err := p.applyNetworkPreference(w); err != nil {
 						logger.Debug("模组重置恢复：应用网络偏好失败，稍后重试",
 							"device", w.ID, "attempt", attempt, "err", err)
@@ -520,7 +536,7 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 		})
 	}
 
-	if backendUsesATRuntime(backendMode) {
+	if workerNeedsATRuntime(devCfg) {
 		m.SetOnDisconnectWithReason(func(reason string) {
 			devID := w.ID
 			// RemoveWorker closes the AT port as part of an intentional teardown. The
@@ -557,6 +573,9 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 		p.configureWorkerSMSRuntime(w, backendMode)
 		if smsCore := w.smsQMICore(); smsCore != nil {
 			smsCore.OnNewSMSWithStorage(func(storage uint8, index uint32) {
+				if !p.isCurrentWorker(w) {
+					return
+				}
 				if w.smsMode != smsModeQMI {
 					return
 				}
@@ -564,6 +583,9 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 				w.handleNewSMSQMI(storage, index)
 			})
 			smsCore.OnNewSMSRaw(func(info qmicore.RawSMSIndication) {
+				if !p.isCurrentWorker(w) {
+					return
+				}
 				if w.smsMode != smsModeQMI {
 					return
 				}
@@ -581,6 +603,9 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 		w.smsMode = smsModeMBIM
 		if mbimCore != nil {
 			mbimCore.OnNewSMS(func() {
+				if !p.isCurrentWorker(w) {
+					return
+				}
 				logger.Info(fmt.Sprintf("[%s] 收到 MBIM 短信通知", w.ID))
 				w.handleNewSMSMBIM("indication")
 			})
@@ -675,31 +700,35 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 	}(w)
 
 	go func(worker *Worker) {
-		// QMI Core 初始化可能需要 15-30 秒（重启后甚至更久）。
-		// 使用递增延迟重试，确保数据面在 QMI Core 就绪后被建立。
-		retryDelays := []time.Duration{3 * time.Second, 5 * time.Second, 7 * time.Second, 10 * time.Second, 15 * time.Second}
-
-		for i, delay := range retryDelays {
+		deadline := time.NewTimer(3 * time.Minute)
+		ticker := time.NewTicker(3 * time.Second)
+		defer deadline.Stop()
+		defer ticker.Stop()
+		attempt := 0
+		for {
 			select {
 			case <-p.ctx.Done():
 				return
 			case <-worker.stop:
 				return
-			case <-time.After(delay):
+			case <-deadline.C:
+				logger.Warn(fmt.Sprintf("[%s] 启动期卡策略应用超时", worker.ID))
+				return
+			case <-ticker.C:
+			}
+			if !workerQMIControlReadyForWork(worker) {
+				continue
 			}
 
+			attempt++
 			_, err := p.refreshIdentityAndApplyCardPolicy(worker, "startup_post_apply")
 			if err == nil && worker.CurrentICCID() != "" {
 				p.prewarmActiveESIMProfileName(worker, "startup_post_apply")
 				return
 			}
-
-			if i < len(retryDelays)-1 {
-				logger.Debug(fmt.Sprintf("[%s] 启动期卡策略应用尚未完成，稍后重试", worker.ID),
-					"attempt", i+1, "err", err)
-			}
+			logger.Debug(fmt.Sprintf("[%s] 启动期卡策略应用尚未完成，稍后重试", worker.ID),
+				"attempt", attempt, "err", err)
 		}
-		logger.Warn(fmt.Sprintf("[%s] 启动期卡策略应用最终未完成", worker.ID))
 	}(w)
 
 	go func(worker *Worker) {
@@ -715,7 +744,7 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 				switch worker.smsMode {
 				case smsModeAT:
 				case smsModeQMI:
-					if worker.QMICore != nil {
+					if worker.QMICore != nil && workerQMIControlReadyForWork(worker) {
 						if err := worker.CheckAllSMSQMI(); err != nil {
 							logger.Warn(fmt.Sprintf("[%s] QMI 轮询短信失败", worker.ID), "err", err)
 						}
@@ -740,6 +769,9 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 	}
 
 	p.persistDeviceAttachmentsIfChanged(devCfg)
+	if qmiCore == nil && p.lifecycle != nil && p.isCurrentWorker(w) {
+		p.lifecycle.FinishOnline(w.ID)
+	}
 
 	return w, nil
 }

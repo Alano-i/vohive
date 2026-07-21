@@ -111,6 +111,10 @@ type Worker struct {
 	stop             chan struct{}
 	stopOnce         sync.Once
 	atRuntimeMu      sync.Mutex
+	runtimeRefreshMu sync.Mutex
+	runtimeRefreshBG atomic.Bool
+	qmiStartRetrying atomic.Bool
+	qmiConverging    atomic.Bool
 
 	cachedIP            string
 	cachedPublicIPv6    string
@@ -131,6 +135,8 @@ type Worker struct {
 
 	qmiRegistrationMu       sync.Mutex
 	qmiRegistrationInFlight bool
+	qmiRegistrationDone     chan struct{}
+	qmiRegistrationCancel   context.CancelFunc
 
 	operatorScanMu      sync.Mutex
 	operatorScanCurrent OperatorScanResult
@@ -195,9 +201,6 @@ type Pool struct {
 	switchContexts   map[string]esimSwitchContext
 	switchTokens     map[string]uint64
 	switchSeq        uint64
-
-	// 概览监控页面流定阅数统计
-	overviewSubs atomic.Int32
 
 	// 热插拔监听
 	udevWatcher    *UdevWatcher
@@ -386,13 +389,30 @@ func atRadioReadOptionsForReason(reason string) ATRadioReadOptions {
 	}
 }
 
-func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.DeviceStatus {
+type runtimeStatusSample struct {
+	status        modem.DeviceStatus
+	imeiValid     bool
+	firmwareValid bool
+	signalValid   bool
+	servingValid  bool
+	simValid      bool
+	modeValid     bool
+	full          bool
+}
+
+func (s runtimeStatusSample) valid() bool {
+	return s.full || s.imeiValid || s.firmwareValid || s.signalValid ||
+		s.servingValid || s.simValid || s.modeValid
+}
+
+func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) runtimeStatusSample {
 	if w.Backend != nil && w.Backend.Mode() != "at" {
 		if ctx == nil {
 			ctx = context.Background()
 		}
 
-		status := modem.DeviceStatus{}
+		sample := runtimeStatusSample{}
+		status := &sample.status
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 
@@ -408,6 +428,7 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.
 			if v, err := w.Backend.GetIMEI(ctx); err == nil {
 				mu.Lock()
 				status.IMEI = v
+				sample.imeiValid = true
 				mu.Unlock()
 			}
 		})
@@ -415,6 +436,7 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.
 			if v, err := w.Backend.GetRevision(ctx); err == nil {
 				mu.Lock()
 				status.Firmware = v
+				sample.firmwareValid = true
 				mu.Unlock()
 			}
 		})
@@ -426,6 +448,7 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.
 				status.SignalRSRQ = sig.RSRQ
 				status.SignalSINR = sig.SINR
 				status.NR5GSignalSINR = sig.NR5GSINR
+				sample.signalValid = true
 				mu.Unlock()
 			}
 		})
@@ -442,6 +465,7 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.
 				status.PSAttached = ss.PSAttached
 				status.LAC = ss.LAC
 				status.CellID = ss.CellID
+				sample.servingValid = true
 				mu.Unlock()
 			}
 		})
@@ -449,6 +473,7 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.
 			if inserted, err := w.Backend.IsSimInserted(ctx); err == nil {
 				mu.Lock()
 				status.SimInserted = inserted
+				sample.simValid = true
 				mu.Unlock()
 			}
 		})
@@ -457,12 +482,13 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.
 				m := int(opMode)
 				mu.Lock()
 				status.OperatingMode = &m
+				sample.modeValid = true
 				mu.Unlock()
 			}
 		})
 
 		wg.Wait()
-		return status
+		return sample
 	}
 
 	status := modem.DeviceStatus{}
@@ -484,29 +510,53 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) modem.
 	}
 	status.ICCID = ""
 	status.IMSI = ""
-	return status
+	return runtimeStatusSample{status: status, full: true}
 }
 
 func (w *Worker) RefreshRuntime(ctx context.Context, reason string) error {
 	if w == nil {
 		return fmt.Errorf("worker_nil")
 	}
+	if !workerQMIControlReadyForWork(w) {
+		return fmt.Errorf("qmi_control_not_ready")
+	}
+	w.runtimeRefreshMu.Lock()
+	defer w.runtimeRefreshMu.Unlock()
 	if ctx == nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 	}
 
-	status := w.collectRuntimeStatus(ctx, reason)
+	sample := w.collectRuntimeStatus(ctx, reason)
 	healthy := w.IsDeviceHealthy()
 
 	w.cacheMu.Lock()
-	updated := w.mergeRuntimeStateLocked(status, healthy)
+	updated := w.mergeRuntimeSampleLocked(sample, healthy)
 	if !updated {
 		w.state.Meta.Healthy = healthy
 	}
 	w.cacheMu.Unlock()
 	return nil
+}
+
+// TryRefreshRuntime runs a background refresh only when this worker has no
+// other background refresh in progress. It prevents slow QMI requests from
+// accumulating behind periodic overview and health timers.
+func (w *Worker) TryRefreshRuntime(ctx context.Context, reason string) bool {
+	return w.tryBackgroundRuntimeRefresh(ctx, reason, nil)
+}
+
+func (w *Worker) tryBackgroundRuntimeRefresh(ctx context.Context, reason string, before func()) bool {
+	if w == nil || !workerQMIControlReadyForWork(w) || !w.runtimeRefreshBG.CompareAndSwap(false, true) {
+		return false
+	}
+	defer w.runtimeRefreshBG.Store(false)
+	if before != nil {
+		before()
+	}
+	_ = w.RefreshRuntime(ctx, reason)
+	return true
 }
 
 type liveSIMIdentityRefreshResult struct {
@@ -646,10 +696,19 @@ func (p *Pool) bindQMIStateIndications(worker *Worker) {
 	}
 
 	worker.QMICore.OnSimStatusChanged(func() {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		logger.Info("[事件驱动] SIM 状态变化", "device", worker.ID)
 		p.handleSIMStatusEvent(worker.ID, "qmi_sim_status", nil, "")
 		p.wakeDesiredVoWiFiRecoverFromDeviceEvent(worker.ID, "post_switch_qmi_sim_status")
+		if p.IsESIMSwitching(worker.ID) || worker.SIMIdentitySuppressesOverviewIMSI() {
+			return
+		}
 		go func() {
+			if !p.isCurrentWorker(worker) {
+				return
+			}
 			if err := p.applyNetworkPreference(worker); err != nil {
 				logger.Warn("SIM 状态变化后 QMI 网络偏好协调失败", "device", worker.ID, "err", err)
 			}
@@ -663,6 +722,9 @@ func (p *Pool) bindMBIMStateIndications(worker *Worker) {
 	}
 
 	worker.MBIMCore.OnSimStatusChanged(func() {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		logger.Info("[事件驱动] MBIM SIM 状态变化", "device", worker.ID)
 		p.handleSIMStatusEvent(worker.ID, "mbim_sim_status", nil, "")
 		p.wakeDesiredVoWiFiRecoverFromDeviceEvent(worker.ID, "post_switch_mbim_sim_status")
@@ -674,6 +736,9 @@ func (p *Pool) bindMBIMSlotIndications(worker *Worker) {
 		return
 	}
 	worker.MBIMCore.OnSlotStatus(func(slotIndex, state uint32) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		logger.Debug("收到 MBIM 卡槽状态指示", "device", worker.ID, "slot", slotIndex, "state", state)
 		p.wakeDesiredVoWiFiRecoverFromDeviceEvent(worker.ID, "mbim_slot_status")
 	})
@@ -684,9 +749,15 @@ func (p *Pool) bindMBIMHealthIndications(worker *Worker) {
 		return
 	}
 	worker.MBIMCore.OnRecoveryExhausted(func(reason string, err error) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		p.maybeScheduleTransportRebuild(worker, HealthLayerMBIM, reason, err)
 	})
 	worker.MBIMCore.OnHealth(func(event mbimcore.HealthEvent) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		switch event.State {
 		case mbimcore.HealthEventHealthy:
 			worker.RecordWatchdogEvent(WatchdogEvent{
@@ -727,19 +798,18 @@ func (p *Pool) bindQMIHealthIndications(worker *Worker) {
 		return
 	}
 	worker.QMICore.OnRecoveryExhausted(func(reason string, err error) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		p.maybeScheduleTransportRebuild(worker, HealthLayerQMI, reason, err)
 	})
 	worker.QMICore.OnHealthEvent(func(event qmicore.HealthEvent) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		switch event.State {
 		case qmicore.HealthEventHealthy:
-			worker.RecordWatchdogEvent(WatchdogEvent{
-				Layer:     HealthLayerQMI,
-				State:     HealthStateHealthy,
-				EventType: string(event.State),
-				Reason:    event.Reason,
-				At:        event.At,
-			})
-			worker.resetHealthFailureStreak()
+			p.markQMIControlRecovered(worker, event.Reason)
 		case qmicore.HealthEventSuspect:
 			worker.RecordWatchdogEvent(WatchdogEvent{
 				Layer:     HealthLayerQMI,
@@ -749,6 +819,7 @@ func (p *Pool) bindQMIHealthIndications(worker *Worker) {
 				At:        event.At,
 			})
 		case qmicore.HealthEventRecovering:
+			worker.setCachedHealthy(false)
 			recoveryUntil := time.Now().Add(qmiHealthGraceAfterReset)
 			worker.RecordWatchdogEvent(WatchdogEvent{
 				Layer:         HealthLayerQMI,
@@ -920,6 +991,9 @@ func (p *Pool) bindESIMUIMIndications(worker *Worker) {
 	}
 
 	worker.QMICore.OnUIMRefresh(func(info *qmi.UIMRefreshIndication) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		fileCount := 0
 		stage := uint8(0)
 		if info != nil {
@@ -947,6 +1021,9 @@ func (p *Pool) bindESIMUIMIndications(worker *Worker) {
 	})
 
 	worker.QMICore.OnUIMSlotStatus(func(info *qmi.UIMSlotStatus) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
 		slotCount := 0
 		if info != nil {
 			slotCount = len(info.Slots)
@@ -993,6 +1070,8 @@ func (p *Pool) RemoveWorker(deviceID string) error {
 	if worker == nil {
 		return fmt.Errorf("设备未找到")
 	}
+	worker.atRuntimeMu.Lock()
+	defer worker.atRuntimeMu.Unlock()
 	if !alreadyRebuilding {
 		defer func() {
 			p.mu.Lock()
@@ -1138,9 +1217,12 @@ func (p *Pool) refreshIdentityAndApplyCardPolicy(worker *Worker, reason string) 
 	if worker == nil {
 		return liveSIMIdentityRefreshResult{}, nil
 	}
+	if !workerQMIControlReadyForWork(worker) {
+		return liveSIMIdentityRefreshResult{}, fmt.Errorf("qmi_control_not_ready")
+	}
 
-	_ = worker.RefreshRuntime(nil, reason)
-	result, identityErr := worker.refreshIdentityLive(nil, reason)
+	_ = worker.RefreshRuntime(context.Background(), reason)
+	result, identityErr := worker.refreshIdentityLive(context.Background(), reason)
 
 	if p != nil {
 		p.PersistRuntimeState(worker)
@@ -1185,6 +1267,9 @@ func (p *Pool) prewarmActiveESIMProfileName(worker *Worker, reason string) {
 func (p *Pool) applyNetworkPreference(worker *Worker) error {
 	if worker == nil {
 		return fmt.Errorf("worker 不存在")
+	}
+	if !workerQMIControlReadyForWork(worker) {
+		return fmt.Errorf("qmi_control_not_ready")
 	}
 	nc := worker.NetworkController()
 	if nc == nil {
@@ -1778,17 +1863,15 @@ func (p *Pool) overviewStreamLoop() {
 			}
 			p.mu.RUnlock()
 
-			var wg sync.WaitGroup
 			for _, w := range workers {
 				if w != nil && w.StreamSubCount() > 0 {
-					wg.Add(1)
 					go func(worker *Worker) {
-						defer wg.Done()
-						_ = worker.RefreshRuntime(nil, "overview_stream")
+						ctx, cancel := context.WithTimeout(p.ctx, 5*time.Second)
+						defer cancel()
+						worker.TryRefreshRuntime(ctx, "overview_stream")
 					}(w)
 				}
 			}
-			wg.Wait()
 		}
 	}
 }
@@ -1815,6 +1898,16 @@ func (p *Pool) GetWorker(id string) *Worker {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.workers[id]
+}
+
+func (p *Pool) isCurrentWorker(worker *Worker) bool {
+	if p == nil || worker == nil {
+		return false
+	}
+	p.mu.RLock()
+	current := p.workers[worker.ID]
+	p.mu.RUnlock()
+	return current == worker
 }
 
 func (p *Pool) LifecycleSnapshot(deviceID string) LifecycleSnapshot {

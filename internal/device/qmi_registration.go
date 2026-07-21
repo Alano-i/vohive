@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	qmimanager "github.com/iniwex5/quectel-qmi-go/pkg/manager"
@@ -364,8 +365,31 @@ func sleepQMIRegistrationPoll(ctx context.Context, delay time.Duration) error {
 }
 
 func (w *Worker) EnsureQMIRegistration(ctx context.Context, requiredForData bool) error {
-	err := w.ensureQMIRegistration(ctx, requiredForData)
-	return qmiRegistrationPreferenceError(err, requiredForData)
+	if w == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	for {
+		runCtx, release, runningDone, started := w.beginQMIRegistration(ctx)
+		if started {
+			defer release()
+			err := w.ensureQMIRegistration(runCtx, requiredForData)
+			return qmiRegistrationPreferenceError(err, requiredForData)
+		}
+
+		select {
+		case <-ctx.Done():
+			return qmiRegistrationPreferenceError(ctx.Err(), requiredForData)
+		case <-w.stop:
+			return qmiRegistrationPreferenceError(context.Canceled, requiredForData)
+		case <-runningDone:
+			// The previous best-effort run may have completed without satisfying a
+			// newly requested data connection. Re-check under a fresh ownership claim.
+		}
+	}
 }
 
 func (w *Worker) ensureQMIRegistration(ctx context.Context, requiredForData bool) error {
@@ -418,35 +442,15 @@ func (w *Worker) startQMIRegistrationReconcile(ctx context.Context, reason strin
 		}
 	}
 
-	w.qmiRegistrationMu.Lock()
-	if w.qmiRegistrationInFlight {
-		w.qmiRegistrationMu.Unlock()
+	runCtx, release, _, started := w.beginQMIRegistration(ctx)
+	if !started {
 		logger.Debug("QMI 后台驻网协调已在运行，跳过重复触发", "device", w.ID, "reason", reason)
 		return false
 	}
-	w.qmiRegistrationInFlight = true
-	w.qmiRegistrationMu.Unlock()
 
 	go func() {
 		start := time.Now()
-		runCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		if w.stop != nil {
-			done := make(chan struct{})
-			go func() {
-				select {
-				case <-w.stop:
-					cancel()
-				case <-done:
-				}
-			}()
-			defer close(done)
-		}
-		defer func() {
-			w.qmiRegistrationMu.Lock()
-			w.qmiRegistrationInFlight = false
-			w.qmiRegistrationMu.Unlock()
-		}()
+		defer release()
 
 		logger.Debug("QMI 后台驻网协调开始", "device", w.ID, "reason", reason)
 		if err := run(runCtx); err != nil {
@@ -456,6 +460,73 @@ func (w *Worker) startQMIRegistrationReconcile(ctx context.Context, reason strin
 		logger.Debug("QMI 后台驻网协调完成", "device", w.ID, "reason", reason, "elapsed_ms", time.Since(start).Milliseconds())
 	}()
 	return true
+}
+
+func (w *Worker) beginQMIRegistration(parent context.Context) (context.Context, func(), <-chan struct{}, bool) {
+	if w == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return context.Background(), func() {}, closed, false
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+
+	w.qmiRegistrationMu.Lock()
+	if w.qmiRegistrationInFlight {
+		done := w.qmiRegistrationDone
+		w.qmiRegistrationMu.Unlock()
+		return nil, nil, done, false
+	}
+
+	runCtx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	w.qmiRegistrationInFlight = true
+	w.qmiRegistrationDone = done
+	w.qmiRegistrationCancel = cancel
+	w.qmiRegistrationMu.Unlock()
+
+	stopDone := make(chan struct{})
+	if w.stop != nil {
+		go func() {
+			select {
+			case <-w.stop:
+				cancel()
+			case <-stopDone:
+			}
+		}()
+	}
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			close(stopDone)
+			cancel()
+			w.qmiRegistrationMu.Lock()
+			if w.qmiRegistrationDone == done {
+				w.qmiRegistrationInFlight = false
+				w.qmiRegistrationDone = nil
+				w.qmiRegistrationCancel = nil
+				close(done)
+			}
+			w.qmiRegistrationMu.Unlock()
+		})
+	}
+	return runCtx, release, done, true
+}
+
+func (w *Worker) cancelQMIRegistration() <-chan struct{} {
+	if w == nil {
+		return nil
+	}
+	w.qmiRegistrationMu.Lock()
+	cancel := w.qmiRegistrationCancel
+	done := w.qmiRegistrationDone
+	w.qmiRegistrationMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return done
 }
 
 func qmiRegistrationPreferenceError(err error, requiredForData bool) error {

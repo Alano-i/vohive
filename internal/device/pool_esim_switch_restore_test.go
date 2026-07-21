@@ -56,12 +56,6 @@ type esimSwitchRestoreBackendStub struct {
 	rebootCalls         int
 }
 
-func setPrivateFieldSwitchRestore(t *testing.T, target any, fieldName string, value any) {
-	t.Helper()
-	field := reflect.ValueOf(target).Elem().FieldByName(fieldName)
-	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
-}
-
 func setPrivateMapFieldSwitchRestore(t *testing.T, target any, fieldName string, key any, value func(reflect.Type) reflect.Value) {
 	t.Helper()
 	field := reflect.ValueOf(target).Elem().FieldByName(fieldName)
@@ -92,14 +86,6 @@ func withDeviceEventRecoverWakeDelay(t *testing.T, delay time.Duration) {
 	t.Cleanup(func() {
 		deviceEventRecoverWakeDelay = original
 	})
-}
-
-func repeatedSIMAuthOpenErrors(count int) []error {
-	errs := make([]error, 0, count)
-	for i := 0; i < count; i++ {
-		errs = append(errs, fmt.Errorf("sim_auth_open_not_ready_%d", i+1))
-	}
-	return errs
 }
 
 func withFastPostSwitchIdentityPolling(t *testing.T) {

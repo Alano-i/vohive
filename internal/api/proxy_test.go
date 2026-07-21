@@ -22,12 +22,12 @@ type staticProxyInstanceRepo struct {
 	instances []config.ProxyInstance
 }
 
-func (r staticProxyInstanceRepo) List(context.Context) ([]config.ProxyInstance, error) {
+func (r *staticProxyInstanceRepo) List(context.Context) ([]config.ProxyInstance, error) {
 	out := append([]config.ProxyInstance(nil), r.instances...)
 	return out, nil
 }
 
-func (r staticProxyInstanceRepo) Get(_ context.Context, id string) (*config.ProxyInstance, error) {
+func (r *staticProxyInstanceRepo) Get(_ context.Context, id string) (*config.ProxyInstance, error) {
 	for _, inst := range r.instances {
 		if inst.ID == id {
 			instCopy := inst
@@ -37,7 +37,7 @@ func (r staticProxyInstanceRepo) Get(_ context.Context, id string) (*config.Prox
 	return nil, nil
 }
 
-func (r staticProxyInstanceRepo) ReplaceAll(_ context.Context, instances []config.ProxyInstance) error {
+func (r *staticProxyInstanceRepo) ReplaceAll(_ context.Context, instances []config.ProxyInstance) error {
 	r.instances = append([]config.ProxyInstance(nil), instances...)
 	return nil
 }
@@ -212,7 +212,7 @@ func TestBuildProxyConfigsAllowsInterfaceWithoutGlobalIPv4(t *testing.T) {
 	})
 	s := &Server{
 		pool: p,
-		proxyRepo: staticProxyInstanceRepo{instances: []config.ProxyInstance{
+		proxyRepo: &staticProxyInstanceRepo{instances: []config.ProxyInstance{
 			{
 				ID:         "proxy-lo",
 				DeviceID:   "dev-lo",
@@ -250,7 +250,7 @@ func TestBuildProxyConfigsAllowsMissingRuntimeInterface(t *testing.T) {
 	})
 	s := &Server{
 		pool: p,
-		proxyRepo: staticProxyInstanceRepo{instances: []config.ProxyInstance{
+		proxyRepo: &staticProxyInstanceRepo{instances: []config.ProxyInstance{
 			{
 				ID:         "proxy-missing-iface",
 				DeviceID:   "dev-missing",

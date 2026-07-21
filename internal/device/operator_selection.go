@@ -107,7 +107,7 @@ func (w *Worker) GetOperatorScanSnapshot() OperatorScanResult {
 	return current
 }
 
-func (w *Worker) StartOrGetOperatorScan(ctx context.Context) OperatorScanResult {
+func (w *Worker) StartOrGetOperatorScan() OperatorScanResult {
 	if w == nil {
 		return OperatorScanResult{
 			Status:    OperatorScanStatusFailed,
@@ -115,9 +115,6 @@ func (w *Worker) StartOrGetOperatorScan(ctx context.Context) OperatorScanResult 
 			Message:   ErrWorkerNil.Error(),
 			Err:       ErrWorkerNil.Error(),
 		}
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	now := time.Now()
 	w.operatorScanMu.Lock()

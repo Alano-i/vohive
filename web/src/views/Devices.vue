@@ -65,7 +65,6 @@ const selectedId = ref('')
 const selectedDetail = ref<DeviceOverviewItem | null>(null)
 const hasAutoSelected = ref(false)
 const deviceTabs = new Set(['overview', 'esim', 'at', 'ussd', 'config', 'card'])
-const esimCapableDeviceIds = ref(new Set<string>())
 
 const editConfig = ref<DeviceConfigDTO | null>(null)
 const editBaseline = ref('')
@@ -173,11 +172,14 @@ function isDeviceEsimEnabled(device: Pick<DeviceMgmtListItem | DeviceOverviewIte
 }
 
 const selectedDeviceEsimCapable = computed(() => (
-  esimCapableDeviceIds.value.has(selectedId.value) ||
   isDeviceEsimEnabled(selectedDetail.value) ||
   isDeviceEsimEnabled(selectedListItem.value)
 ))
+const selectedIdentityPhase = computed(() => (
+  selectedDetail.value?.sim_identity_phase || selectedListItem.value?.sim_identity_phase || ''
+))
 const selectedPolicyICCID = computed(() => {
+  if (selectedIdentityPhase.value === 'transitioning' || selectedIdentityPhase.value === 'degraded') return ''
   const detailICCID = String(selectedDetail.value?.modem?.iccid || '').trim()
   if (detailICCID) return detailICCID
   const listICCID = String(selectedListItem.value?.modem?.iccid || '').trim()
@@ -376,8 +378,9 @@ function resolveDetailForDisplay(detail: DeviceOverviewItem | null): DeviceOverv
   const detailID = detail.id
   const listModem = devices.value.find(device => device.id === detailID)?.modem
   const previousIdentity = lastKnownSIMIdentityByDevice.get(detailID)
-  const iccid = String(detail.modem?.iccid || listModem?.iccid || previousIdentity?.iccid || '').trim()
-  const imsi = String(detail.modem?.imsi || previousIdentity?.imsi || '').trim()
+  const identityTransitioning = detail.sim_identity_phase === 'transitioning' || detail.sim_identity_phase === 'degraded'
+  const iccid = String(detail.modem?.iccid || (identityTransitioning ? '' : listModem?.iccid || previousIdentity?.iccid) || '').trim()
+  const imsi = String(detail.modem?.imsi || (identityTransitioning ? '' : previousIdentity?.imsi) || '').trim()
   if (iccid || imsi) {
     lastKnownSIMIdentityByDevice.set(detailID, { iccid, imsi })
     detail = {
@@ -686,27 +689,9 @@ async function fetchAll() {
     const prevSelected = selectedId.value
     if (listAbort) listAbort.abort()
     listAbort = new AbortController()
-    const [listResult, capabilityResult] = await Promise.all([
-      devicesStore.fetchList(listAbort.signal),
-      devicesService.getSMSProfiles()
-    ])
+    const listResult = await devicesStore.fetchList(listAbort.signal)
     if (!listResult.ok) throw new Error(listResult.error.message)
     devices.value = (storeList.value || []) as DeviceMgmtListItem[]
-    const nextEsimCapableDeviceIds = new Set(esimCapableDeviceIds.value)
-    for (const device of devices.value) {
-      if (isDeviceEsimEnabled(device)) {
-        nextEsimCapableDeviceIds.add(device.id)
-      }
-    }
-    // Capability is hardware-stable. A transient worker/eUICC query failure
-    // must not remove the eSIM tab after this device has already proved it is
-    // eSIM-capable.
-    if (capabilityResult.ok) {
-      for (const id of capabilityResult.data.esimDeviceIds) {
-        nextEsimCapableDeviceIds.add(id)
-      }
-    }
-    esimCapableDeviceIds.value = nextEsimCapableDeviceIds
     loadLastOkAt.value = Date.now()
     applyRouteSelection()
 

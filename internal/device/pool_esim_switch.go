@@ -119,19 +119,24 @@ func (p *Pool) beginESIMSwitch(deviceID string, targetICCID string) esimSwitchCo
 	p.switchTokens[deviceID] = snapshot.SwitchToken
 	p.switchMu.Unlock()
 
-	go func(capturedAt time.Time) {
-		<-time.After(2 * time.Minute)
+	go func(capturedAt time.Time, token uint64) {
+		timer := time.NewTimer(2 * time.Minute)
+		defer timer.Stop()
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-timer.C:
+		}
 		p.switchMu.Lock()
-		defer p.switchMu.Unlock()
 		current, ok := p.switchContexts[deviceID]
-		if !ok || !current.CapturedAt.Equal(capturedAt) {
+		stillCurrent := ok && current.CapturedAt.Equal(capturedAt) && p.switchTokens[deviceID] == token
+		p.switchMu.Unlock()
+		if !stillCurrent {
 			return
 		}
-		delete(p.switchContexts, deviceID)
-		delete(p.switchingDevices, deviceID)
-		delete(p.switchTokens, deviceID)
-		logger.Warn("切卡超时保护触发，已自动清理切卡中标记", "device", deviceID)
-	}(snapshot.CapturedAt)
+		logger.Warn("切卡超时保护触发，开始恢复切卡前运行态", "device", deviceID, "switch_token", token)
+		p.handleESIMSwitchFailed(deviceID, token)
+	}(snapshot.CapturedAt, snapshot.SwitchToken)
 
 	logger.Info("切卡前已记录运行态快照",
 		"device", deviceID,
@@ -331,6 +336,14 @@ func (p *Pool) bringRadioOnlineAfterSwitch(deviceID string, worker *Worker, snap
 func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint64 {
 	snapshot := p.beginESIMSwitch(deviceID, targetICCID)
 	if worker := p.GetWorker(deviceID); worker != nil {
+		if done := worker.cancelQMIRegistration(); done != nil {
+			select {
+			case <-done:
+				logger.Debug("切卡前已停止上一 Profile 的驻网协调", "device", deviceID)
+			case <-time.After(3 * time.Second):
+				logger.Warn("切卡前等待旧驻网协调退出超时，继续切卡", "device", deviceID)
+			}
+		}
 		worker.markHealthRecoveryWindow(qmiHealthGraceAfterSwitch)
 		snapshot.IdentityGeneration = worker.BeginSIMIdentityTransition(snapshot.TargetICCID, "esim_switch_begin")
 		p.updateESIMSwitchIdentityGeneration(deviceID, snapshot.SwitchToken, snapshot.IdentityGeneration)
@@ -660,7 +673,7 @@ func (p *Pool) switchTokenStillCurrent(deviceID string, token uint64, stage stri
 func (p *Pool) refreshPostSwitchRuntime(deviceID string, worker *Worker) int64 {
 	start := time.Now()
 	worker.InvalidateDynamicCache()
-	_ = worker.RefreshRuntime(nil, "post_switch_finalize")
+	_ = worker.RefreshRuntime(context.Background(), "post_switch_finalize")
 	p.PersistRuntimeState(worker)
 	p.broadcastVoWiFiStateChange(deviceID)
 	return time.Since(start).Milliseconds()
@@ -735,7 +748,7 @@ func (p *Pool) schedulePostSwitchIdentityRefreshes(deviceID string, snapshot esi
 			if worker.SIMOperatorMetadataReady(snapshot.TargetICCID, snapshot.IdentityGeneration) {
 				return
 			}
-			if err := worker.RefreshIdentityLive(nil, "post_switch_operator_metadata"); err != nil {
+			if err := worker.RefreshIdentityLive(context.Background(), "post_switch_operator_metadata"); err != nil {
 				logger.Debug("切卡后补刷新原运营商失败", "device", deviceID, "delay", delay.String(), "err", err)
 				continue
 			}
@@ -1033,6 +1046,12 @@ func (p *Pool) handleESIMSwitchFailed(deviceID string, token uint64) {
 		"flight_before", snapshot.FlightModeBefore,
 		"qmi_connected_before", snapshot.QMIConnectedBefore,
 		"network_enabled_before", snapshot.NetworkEnabledBefore)
+	worker.restoreSIMIdentityAfterFailedTransition(snapshot.ICCIDBefore, snapshot.IMSIBefore, "esim_switch_failed")
+	if _, err := p.refreshIdentityAndApplyCardPolicy(worker, "esim_switch_failed"); err == nil && worker.CurrentICCID() != "" {
+		logger.Info("eSIM 切卡失败后已恢复原 Profile 身份与策略", "device", deviceID, "iccid", worker.CurrentICCID())
+		p.broadcastVoWiFiStateChange(deviceID)
+		return
+	}
 	p.restoreRadioDataForSwitchSnapshot(deviceID, worker, snapshot, "switch_failed", false)
 	p.broadcastVoWiFiStateChange(deviceID)
 }

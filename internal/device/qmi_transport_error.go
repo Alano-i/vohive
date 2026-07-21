@@ -59,23 +59,10 @@ func (p *Pool) handleTransportRecoveryExhausted(worker *Worker, generation uint6
 	})
 }
 
-// maybeScheduleTransportRebuild applies the sliding-window guard before
-// scheduling a worker rebuild. Over-cap devices are marked Failed instead of
-// looping rebuilds.
+// maybeScheduleTransportRebuild routes exhausted transport recovery through the
+// pool-level deduplicated recovery controller.
 func (p *Pool) maybeScheduleTransportRebuild(worker *Worker, layer HealthLayer, reason string, err error) bool {
 	if p == nil || worker == nil {
-		return false
-	}
-	if p.transportRecovery != nil && !p.transportRecovery.AllowRebuild(worker.ID) {
-		logger.Warn("传输恢复重建超过滑窗上限，置 Failed 等待人工/重枚举",
-			"device", worker.ID, "layer", layer, "reason", reason, "err", err)
-		worker.RecordWatchdogEvent(WatchdogEvent{
-			Layer:     layer,
-			State:     HealthStateFailed,
-			EventType: "transport_recovery_giveup",
-			Reason:    reason,
-			Err:       err,
-		})
 		return false
 	}
 	return p.handleTransportRecoveryExhausted(worker, worker.generation, layer, reason, err)

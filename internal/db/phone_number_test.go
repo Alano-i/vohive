@@ -14,15 +14,6 @@ func initPhoneNumberTestDB(t *testing.T) {
 	t.Cleanup(func() { DB = nil })
 }
 
-func loadSIMCardByIMSI(t *testing.T, imsi string) SIMCard {
-	t.Helper()
-	var sim SIMCard
-	if err := DB.Where("imsi = ?", imsi).First(&sim).Error; err != nil {
-		t.Fatalf("First(sim) error=%v", err)
-	}
-	return sim
-}
-
 func loadSIMSubscriptionByIMSI(t *testing.T, imsi string) SIMSubscription {
 	t.Helper()
 	var sub SIMSubscription

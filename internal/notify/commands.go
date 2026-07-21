@@ -606,15 +606,6 @@ func (m *Manager) handleCmdSwitch(cmdCtx CommandContext, args []string) string {
 	return switchAcceptedBlock(deviceID, profileName)
 }
 
-// broadcast 向所有通知渠道广播消息
-func (m *Manager) broadcast(text string) {
-	m.broadcastWithContext(NotificationContext{
-		Event:     "raw",
-		Text:      text,
-		Timestamp: time.Now(),
-	})
-}
-
 // handleCmdCall 处理 /vocall 命令，用于发起无头模拟呼叫
 // 命令格式: /vocall <设备ID> <号码> [保持秒数]
 func (m *Manager) handleCmdCall(cmdCtx CommandContext, args []string) string {

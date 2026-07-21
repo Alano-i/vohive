@@ -30,6 +30,29 @@ func TestTransportRecoveryControllerSerializesPerDevice(t *testing.T) {
 	}
 }
 
+func TestTransportRecoveryDuplicateEventsDoNotConsumeBudget(t *testing.T) {
+	controller := NewTransportRecoveryController(nil)
+	event := TransportRecoveryEvent{DeviceID: "dev1", Kind: TransportRecoveryEventHealthSuspect}
+	if accepted, overLimit := controller.ObserveWithBudget(event); !accepted || overLimit {
+		t.Fatal("first event should be accepted")
+	}
+	for i := 0; i < rebuildMaxInWindow*2; i++ {
+		if accepted, overLimit := controller.ObserveWithBudget(event); accepted || overLimit {
+			t.Fatalf("active duplicate %d must be deduplicated without consuming budget", i+1)
+		}
+	}
+	controller.Finish(event.DeviceID)
+	for i := 1; i < rebuildMaxInWindow; i++ {
+		if accepted, overLimit := controller.ObserveWithBudget(event); !accepted || overLimit {
+			t.Fatalf("unique attempt %d should remain within budget", i+1)
+		}
+		controller.Finish(event.DeviceID)
+	}
+	if accepted, overLimit := controller.ObserveWithBudget(event); accepted || !overLimit {
+		t.Fatal("next unique attempt should hit the rebuild budget")
+	}
+}
+
 func TestTransportRecoveryControllerAllowsDifferentDevices(t *testing.T) {
 	controller := NewTransportRecoveryController(nil)
 	err := errors.New("QMI: read failed: EOF")
@@ -133,36 +156,53 @@ func TestQMIRecoveryActiveNotLeakedWhenModemRebootAlreadyRunning(t *testing.T) {
 	}
 }
 
-func TestAllowRebuildSlidingWindow(t *testing.T) {
+func TestObserveWithBudgetUsesSlidingWindow(t *testing.T) {
 	c := NewTransportRecoveryController(nil)
 	now := time.Now()
 	dev := "dev-1"
 
 	for i := 0; i < rebuildMaxInWindow; i++ {
-		if !c.allowRebuildAt(dev, now.Add(time.Duration(i)*time.Minute)) {
+		accepted, overLimit := c.ObserveWithBudget(TransportRecoveryEvent{
+			DeviceID: dev, Kind: TransportRecoveryEventHealthSuspect,
+			At: now.Add(time.Duration(i) * time.Minute),
+		})
+		if !accepted || overLimit {
 			t.Fatalf("attempt %d within window should be allowed", i+1)
 		}
+		c.Finish(dev)
 	}
-	if c.allowRebuildAt(dev, now.Add(time.Duration(rebuildMaxInWindow)*time.Minute)) {
+	if accepted, overLimit := c.ObserveWithBudget(TransportRecoveryEvent{
+		DeviceID: dev, Kind: TransportRecoveryEventHealthSuspect,
+		At: now.Add(time.Duration(rebuildMaxInWindow) * time.Minute),
+	}); accepted || !overLimit {
 		t.Fatalf("attempt %d should be rejected (over window cap)", rebuildMaxInWindow+1)
 	}
-	if !c.allowRebuildAt(dev, now.Add(rebuildWindow+time.Minute)) {
+	if accepted, overLimit := c.ObserveWithBudget(TransportRecoveryEvent{
+		DeviceID: dev, Kind: TransportRecoveryEventHealthSuspect,
+		At: now.Add(rebuildWindow + time.Minute),
+	}); !accepted || overLimit {
 		t.Fatal("attempt after window should be allowed again")
 	}
 }
 
-func TestAllowRebuildResetOnGenerationChange(t *testing.T) {
+func TestObserveWithBudgetPersistsAcrossGenerationChange(t *testing.T) {
 	c := NewTransportRecoveryController(nil)
 	now := time.Now()
 	dev := "dev-2"
 	for i := 0; i < rebuildMaxInWindow; i++ {
-		c.allowRebuildAt(dev, now)
-	}
-	if c.allowRebuildAt(dev, now) {
-		t.Fatal("should be capped before generation change")
+		accepted, _ := c.ObserveWithBudget(TransportRecoveryEvent{
+			DeviceID: dev, Kind: TransportRecoveryEventHealthSuspect, At: now,
+		})
+		if !accepted {
+			t.Fatalf("attempt %d should be accepted", i+1)
+		}
+		c.Finish(dev)
 	}
 	c.SetWorkerGeneration(dev, 42)
-	if !c.allowRebuildAt(dev, now) {
-		t.Fatal("generation change should clear the rebuild window")
+	if accepted, overLimit := c.ObserveWithBudget(TransportRecoveryEvent{
+		DeviceID: dev, WorkerGeneration: 42,
+		Kind: TransportRecoveryEventHealthSuspect, At: now,
+	}); accepted || !overLimit {
+		t.Fatal("generation change must not reset the physical device rebuild budget")
 	}
 }

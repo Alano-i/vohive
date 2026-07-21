@@ -108,6 +108,14 @@ func TestOverviewStreamEmitVersionTracksActiveESIMProfileName(t *testing.T) {
 	}
 }
 
+func TestOverviewStreamEmitVersionTracksSIMIdentityPhase(t *testing.T) {
+	before := newOverviewStreamEmitVersion(deviceMgmtOverviewLiteItem{SIMIdentityPhase: "ready"})
+	after := newOverviewStreamEmitVersion(deviceMgmtOverviewLiteItem{SIMIdentityPhase: "transitioning"})
+	if shouldSkipOverviewStatePush(&before, after) {
+		t.Fatal("SIM identity phase change must trigger overview stream push")
+	}
+}
+
 func TestOverviewDetailLiveRefreshRequestedDefaultsToCache(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

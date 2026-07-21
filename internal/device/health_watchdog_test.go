@@ -42,6 +42,7 @@ func TestHealthCheckSnapshotsWorkersBeforeQMIProbe(t *testing.T) {
 	lockAcquired := make(chan struct{})
 	go func() {
 		pool.mu.Lock()
+		_ = len(pool.workers)
 		pool.mu.Unlock()
 		close(lockAcquired)
 	}()

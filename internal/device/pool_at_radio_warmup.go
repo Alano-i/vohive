@@ -1,6 +1,7 @@
 package device
 
 import (
+	"context"
 	"time"
 
 	"github.com/iniwex5/vohive/internal/backend"
@@ -36,7 +37,7 @@ func (p *Pool) scheduleATRadioWarmup(worker *Worker, reason string) {
 				default:
 				}
 			}
-			if err := worker.RefreshRuntime(nil, "startup_radio_warmup"); err != nil {
+			if err := worker.RefreshRuntime(context.Background(), "startup_radio_warmup"); err != nil {
 				logger.Debug("AT radio 启动预热失败", "device", worker.ID, "attempt", i+1, "reason", reason, "err", err)
 				continue
 			}

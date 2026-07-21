@@ -424,11 +424,15 @@ func TestModemRebootRecoveryStartsIdentityConvergenceForControlReadyWorker(t *te
 
 func TestMarkQMIControlRecoveredFinishesLifecycleAndHealth(t *testing.T) {
 	p := NewPool(&config.Config{})
+	defer p.cancel()
 	w := &Worker{
 		ID:     "dev-qmi",
 		Config: config.DeviceConfig{ID: "dev-qmi", DeviceBackend: "qmi"},
 		stop:   make(chan struct{}),
 	}
+	p.mu.Lock()
+	p.workers[w.ID] = w
+	p.mu.Unlock()
 	p.lifecycle.BeginRecovery(w.ID, LifecyclePhaseQMIStarting, "qmi_start_core", qmiLifecycleRecoveryTTL)
 
 	p.markQMIControlRecovered(w, "qmi_start_core")

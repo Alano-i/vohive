@@ -157,9 +157,9 @@ func TestWorker_StartOrGetOperatorScanReturnsExistingInFlightTask(t *testing.T) 
 	provider := &mockOperatorProvider{scanBlock: make(chan struct{})}
 	w := &Worker{ID: "dev-1", Backend: provider}
 
-	first := w.StartOrGetOperatorScan(context.Background())
+	first := w.StartOrGetOperatorScan()
 	waitUntilOperatorScanCalls(t, provider, 1, time.Second)
-	second := w.StartOrGetOperatorScan(context.Background())
+	second := w.StartOrGetOperatorScan()
 	close(provider.scanBlock)
 
 	if first.ScanID == "" || second.ScanID == "" {
@@ -177,7 +177,7 @@ func TestWorker_StartOrGetOperatorScanClassifiesDeadlineAsRetryable(t *testing.T
 	provider := &mockOperatorProvider{scanErr: context.DeadlineExceeded}
 	w := &Worker{ID: "dev-1", Backend: provider}
 
-	first := w.StartOrGetOperatorScan(context.Background())
+	first := w.StartOrGetOperatorScan()
 	if first.Status != OperatorScanStatusRunning {
 		t.Fatalf("initial status=%s want %s", first.Status, OperatorScanStatusRunning)
 	}
@@ -206,7 +206,7 @@ func TestWorker_StartOrGetOperatorScanClassifiesQMIInternalAsRetryable(t *testin
 	}
 	w := &Worker{ID: "dev-1", Backend: provider}
 
-	w.StartOrGetOperatorScan(context.Background())
+	w.StartOrGetOperatorScan()
 	waitUntilOperatorScanSettled(t, w, time.Second)
 	got := w.GetOperatorScanSnapshot()
 	if got.Status != OperatorScanStatusFailed {
@@ -231,7 +231,7 @@ func TestWorker_StartOrGetOperatorScanExpiresStaleRunningTask(t *testing.T) {
 	w.operatorScanActive = true
 	w.operatorScanCancel = func() {}
 
-	got := w.StartOrGetOperatorScan(context.Background())
+	got := w.StartOrGetOperatorScan()
 	if got.ScanID != "stale-scan" {
 		t.Fatalf("scan_id=%q want stale-scan; polling an expired scan should not start a new task", got.ScanID)
 	}
@@ -263,12 +263,12 @@ func TestWorker_StartOrGetOperatorScanMergesIncrementalSnapshot(t *testing.T) {
 	}
 	w := &Worker{ID: "dev-1", Backend: provider}
 
-	first := w.StartOrGetOperatorScan(context.Background())
+	first := w.StartOrGetOperatorScan()
 	if first.Status != OperatorScanStatusRunning {
 		t.Fatalf("initial status=%s want %s", first.Status, OperatorScanStatusRunning)
 	}
 
-	got := w.StartOrGetOperatorScan(context.Background())
+	got := w.StartOrGetOperatorScan()
 	close(provider.scanBlock)
 	if len(got.Candidates) != 1 {
 		t.Fatalf("len(candidates)=%d want 1", len(got.Candidates))

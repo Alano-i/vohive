@@ -90,6 +90,7 @@ const secondaryStatus = (d: DeviceMgmtListItem) => {
 
 const vowifiStatusText = (d: DeviceMgmtListItem) => {
   const rt = d?.vowifi_runtime
+  if (!d?.vowifi_active && !rt) return 'VoWiFi 启动中'
   if (!rt) return 'VoWiFi 启动中'
   if (rt.phase === 'failed') return `VoWiFi 失败${vowifiErrorText(rt.last_error)}`
   if (rt.sms_ready) return 'WiFi-Calling'

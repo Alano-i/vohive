@@ -55,7 +55,14 @@ func (p *Pool) refreshModemRebootRecoveredIdentity(w *Worker, reason string) err
 }
 
 func (p *Pool) markQMIControlRecovered(worker *Worker, reason string) {
-	if p == nil || worker == nil {
+	if p == nil || worker == nil || !p.isCurrentWorker(worker) {
+		return
+	}
+	if worker.QMICore != nil && !worker.QMICore.IsControlReady() {
+		worker.setCachedHealthy(false)
+		if p.lifecycle != nil {
+			p.lifecycle.BeginRecovery(worker.ID, LifecyclePhaseRecovering, "qmi_control_not_ready", qmiLifecycleRecoveryTTL)
+		}
 		return
 	}
 	if reason = strings.TrimSpace(reason); reason == "" {
@@ -69,6 +76,7 @@ func (p *Pool) markQMIControlRecovered(worker *Worker, reason string) {
 		At:        time.Now(),
 	})
 	worker.resetHealthFailureStreak()
+	worker.setCachedHealthy(true)
 	if p.lifecycle != nil {
 		p.lifecycle.FinishOnline(worker.ID)
 	}
@@ -323,6 +331,9 @@ func qmiWorkerControlReady(worker *Worker) bool {
 	if worker == nil {
 		return false
 	}
+	if worker.QMICore != nil {
+		return worker.QMICore.IsControlReady()
+	}
 	snapshot := worker.HealthSnapshot()
 	return snapshot.State == HealthStateHealthy && snapshot.Layer == HealthLayerQMI
 }
@@ -371,21 +382,69 @@ func (p *Pool) ScheduleModemRebootRecovery(deviceID string, reason string) {
 // path before rebuilding the worker. A worker-only rebuild cannot recover a
 // cdc-wdm/QMI control plane that remains wedged across reopen attempts.
 func (p *Pool) ScheduleNetworkControlRecovery(worker *Worker, reason string) {
+	p.scheduleNetworkControlRecoveryWithEvent(worker, reason, nil)
+}
+
+func (p *Pool) scheduleNetworkControlRecoveryWithEvent(worker *Worker, reason string, event *TransportRecoveryEvent) bool {
 	if p == nil || worker == nil || strings.TrimSpace(worker.ID) == "" {
-		return
+		return false
+	}
+	if !p.isCurrentWorker(worker) {
+		return false
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "network_control_recovery"
+	}
+
+	eventObserved := false
+	if event != nil && p.transportRecovery != nil {
+		if event.DeviceID == "" {
+			event.DeviceID = worker.ID
+		}
+		if event.WorkerGeneration == 0 {
+			event.WorkerGeneration = worker.generation
+		}
+		accepted, overLimit := p.transportRecovery.ObserveWithBudget(*event)
+		if !accepted {
+			if overLimit {
+				worker.RecordWatchdogEvent(WatchdogEvent{
+					Layer:     HealthLayerPool,
+					State:     HealthStateFailed,
+					EventType: "transport_recovery_giveup",
+					Reason:    reason,
+					Err:       event.Err,
+				})
+				if p.lifecycle != nil {
+					p.lifecycle.SetPhase(worker.ID, LifecyclePhaseDegraded, "transport_recovery_giveup", 0)
+				}
+				logger.Warn("QMI 启动复位超过滑窗上限，停止自动复位",
+					"device", worker.ID, "reason", reason, "err", event.Err)
+			} else {
+				logger.Debug("QMI 控制面恢复已在运行，跳过重复复位", "device", worker.ID, "reason", reason)
+			}
+			return false
+		}
+		eventObserved = true
 	}
 	if !p.beginModemRebootRecovery(worker.ID) {
+		if eventObserved && p.transportRecovery != nil {
+			p.transportRecovery.Finish(worker.ID)
+		}
 		logger.Debug("网络控制面恢复已在运行，跳过重复复位", "device", worker.ID, "reason", reason)
-		return
+		return false
 	}
 	opts := defaultModemRebootRecoveryOptions(worker.ID, reason)
 	opts.delays = manualRebootRecoveryDelays()
+	opts.transportEvent = event
+	opts.transportEventObserved = eventObserved
 	go func() {
 		if err := resetWorkerForNetworkControlRecovery(worker); err != nil {
 			logger.Warn("网络控制面恢复发送模组复位失败，继续尝试重新接管", "device", worker.ID, "reason", reason, "err", err)
 		}
 		p.runModemRebootRecoveryWithClaim(opts, true)
 	}()
+	return true
 }
 
 func resetWorkerForNetworkControlRecovery(worker *Worker) error {
@@ -425,7 +484,25 @@ func (p *Pool) scheduleWorkerRecoveryWithTransportEvent(deviceID string, reason 
 		if event.DeviceID == "" {
 			event.DeviceID = deviceID
 		}
-		if !p.transportRecovery.Observe(*event) {
+		accepted, overLimit := p.transportRecovery.ObserveWithBudget(*event)
+		if !accepted {
+			if overLimit {
+				if worker := p.GetWorker(deviceID); worker != nil {
+					worker.RecordWatchdogEvent(WatchdogEvent{
+						Layer:     HealthLayerPool,
+						State:     HealthStateFailed,
+						EventType: "transport_recovery_giveup",
+						Reason:    reason,
+						Err:       event.Err,
+					})
+				}
+				if p.lifecycle != nil {
+					p.lifecycle.SetPhase(deviceID, LifecyclePhaseDegraded, "transport_recovery_giveup", 0)
+				}
+				logger.Warn("传输恢复重建超过滑窗上限，停止自动重建",
+					"device", deviceID, "reason", reason, "err", event.Err)
+				return false
+			}
 			logger.Debug("QMI 恢复已在运行，跳过重复调度", "device", deviceID, "reason", reason)
 			return false
 		}

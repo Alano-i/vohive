@@ -776,9 +776,7 @@ func looksLikePhoneNumber(v string) bool {
 	if s == "" {
 		return false
 	}
-	if strings.HasPrefix(s, "+") {
-		s = s[1:]
-	}
+	s = strings.TrimPrefix(s, "+")
 	if len(s) < 6 || len(s) > 15 {
 		return false
 	}

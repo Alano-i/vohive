@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/iniwex5/vohive/internal/config"
-	"github.com/iniwex5/vohive/pkg/logger"
 )
 
 var wecomPlaceholderPattern = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_]+)\s*\}\}`)
@@ -357,10 +356,4 @@ func (w *WeComChannel) Close() error {
 		w.client.CloseIdleConnections()
 	}
 	return nil
-}
-
-func logWeComSendFailure(err error) {
-	if err != nil {
-		logger.Warn("企业微信应用通知发送失败", "err", err)
-	}
 }

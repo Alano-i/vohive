@@ -861,26 +861,6 @@ func (s *Server) handleRotate(c *gin.Context) {
 	})
 }
 
-func (s *Server) handleDeviceMgmtStartNetwork(c *gin.Context) {
-	deviceID := deviceIDParam(c)
-	worker, nc, statusCode, err := s.startDeviceNetwork(deviceID)
-	if err != nil {
-		c.JSON(statusCode, gin.H{"status": "error", "message": err.Error()})
-		return
-	}
-	go func() { _ = worker.RefreshRuntime(nil, "start_network") }()
-	c.JSON(http.StatusOK, gin.H{
-		"status":            "ok",
-		"message":           "数据网络已启动",
-		"device":            deviceID,
-		"network_connected": worker.NetworkConnected(),
-		"private_ip":        nc.GetPrivateIP(),
-		"private_ipv6":      nc.GetPrivateIPv6(),
-		"public_ip":         worker.GetCachedIP(),
-		"public_ipv6":       worker.GetCachedIPv6(),
-	})
-}
-
 func (s *Server) startDeviceNetwork(deviceID string) (*device.Worker, device.NetworkController, int, error) {
 	worker := s.pool.GetWorker(deviceID)
 	if worker == nil {
@@ -917,7 +897,7 @@ func (s *Server) handleDeviceMgmtStopNetwork(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "停止数据网络失败: " + err.Error()})
 		return
 	}
-	go func() { _ = worker.RefreshRuntime(nil, "stop_network") }()
+	go func() { _ = worker.RefreshRuntime(context.Background(), "stop_network") }()
 	c.JSON(http.StatusOK, gin.H{
 		"status":            "ok",
 		"message":           "数据网络已停止",
@@ -1159,35 +1139,6 @@ func (s *Server) handleSMSDelivery(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "未找到对应短信投递记录"})
 }
 
-// handleVoWiFiEnable 为指定设备启用 VoWiFi
-func (s *Server) handleVoWiFiEnable(c *gin.Context) {
-	deviceID := deviceIDParam(c)
-	if deviceID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "请指定设备 ID"})
-		return
-	}
-
-	if s.pool == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "error", "message": "服务未就绪"})
-		return
-	}
-
-	if err := s.pool.EnableVoWiFi(deviceID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"status":  "error",
-			"message": "VoWiFi 启用失败: " + err.Error(),
-			"device":  deviceID,
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "ok",
-		"message": "VoWiFi 已启用，设备已进入飞行模式",
-		"device":  deviceID,
-	})
-}
-
 // handleVoWiFiDisable 禁用 VoWiFi，保留当前射频/网络状态
 func (s *Server) handleVoWiFiDisable(c *gin.Context) {
 	deviceID := deviceIDParam(c)
@@ -1319,6 +1270,13 @@ func smsProfileName(name, serviceProvider, fallback string) string {
 	return "未知 Profile"
 }
 
+func smsWorkerESIMEnabled(worker *device.Worker, managed config.DeviceConfig, managedFound bool) bool {
+	if managedFound {
+		return managed.ESIMEnabled
+	}
+	return worker != nil && worker.Config.ESIMEnabled
+}
+
 func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 	managed := config.ListDevices()
 	cfgByID := make(map[string]config.DeviceConfig, len(managed))
@@ -1354,14 +1312,15 @@ func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 		status := worker.GetCachedDeviceStatus()
 		currentICCID := strings.TrimSpace(worker.CurrentICCID())
 		deviceName := worker.ID
-		if cfg, ok := cfgByID[worker.ID]; ok && strings.TrimSpace(cfg.Name) != "" {
-			deviceName = strings.TrimSpace(cfg.Name)
+		managedCfg, managedFound := cfgByID[worker.ID]
+		if managedFound && strings.TrimSpace(managedCfg.Name) != "" {
+			deviceName = strings.TrimSpace(managedCfg.Name)
 		} else if strings.TrimSpace(worker.Config.Name) != "" {
 			deviceName = strings.TrimSpace(worker.Config.Name)
 		}
 
 		added := false
-		if worker.EsimMgr != nil {
+		if smsWorkerESIMEnabled(worker, managedCfg, managedFound) && worker.EsimMgr != nil {
 			if groups, err := worker.EsimMgr.GetProfiles(); err == nil {
 				if len(groups) > 0 {
 					addESIMDeviceID(worker.ID)

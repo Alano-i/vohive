@@ -187,6 +187,7 @@ func (w *Worker) beginSIMIdentityTransitionLocked(targetICCID, reason string, no
 	w.state.Identity.IMSI = ""
 	w.state.Identity.NativeSPN = ""
 	w.clearSIMMetadataLocked()
+	w.clearSIMRuntimeLocked()
 	w.state.Identity.Ready = false
 	w.state.Identity.Phase = simIdentityPhaseTransitioning
 	w.state.Identity.TargetICCID = normalizeSIMIdentity(targetICCID)
@@ -195,6 +196,28 @@ func (w *Worker) beginSIMIdentityTransitionLocked(targetICCID, reason string, no
 	w.state.Identity.LastError = ""
 	w.state.Meta.IdentityUpdatedAt = now
 	w.state.Meta.UpdatedAt = now
+}
+
+// clearSIMRuntimeLocked drops values that belong to the previously active SIM.
+// Device identity and firmware remain valid across a profile switch.
+func (w *Worker) clearSIMRuntimeLocked() {
+	w.state.Runtime.Operator = ""
+	w.state.Runtime.NetworkMode = ""
+	w.state.Runtime.NetworkDuplex = ""
+	w.state.Runtime.RadioBand = ""
+	w.state.Runtime.RadioChannel = 0
+	w.state.Runtime.RegStatus = 0
+	w.state.Runtime.RegStatusText = ""
+	w.state.Runtime.PSAttached = false
+	w.state.Runtime.SignalDBM = 0
+	w.state.Runtime.SignalRSRP = 0
+	w.state.Runtime.SignalRSRQ = 0
+	w.state.Runtime.SignalSINR = 0
+	w.state.Runtime.NR5GSignalSINR = 0
+	w.state.Runtime.LAC = ""
+	w.state.Runtime.CellID = ""
+	w.state.Runtime.APN = ""
+	w.state.Runtime.IMSStatus = 0
 }
 
 func (w *Worker) MarkSIMIdentityDegraded(reason string, err error) {
@@ -214,6 +237,24 @@ func (w *Worker) MarkSIMIdentityDegraded(reason string, err error) {
 	}
 	w.state.Meta.IdentityUpdatedAt = now
 	w.state.Meta.UpdatedAt = now
+}
+
+func (w *Worker) restoreSIMIdentityAfterFailedTransition(iccid, imsi, reason string) {
+	if w == nil {
+		return
+	}
+	now := time.Now()
+	w.cacheMu.Lock()
+	w.state.Identity.ICCID = normalizeSIMIdentity(iccid)
+	w.state.Identity.IMSI = normalizeSIMIdentity(imsi)
+	w.state.Identity.Ready = w.state.Identity.ICCID != "" || w.state.Identity.IMSI != ""
+	w.state.Identity.Phase = simIdentityPhaseReady
+	w.state.Identity.TargetICCID = ""
+	w.state.Identity.LastReason = strings.TrimSpace(reason)
+	w.state.Identity.LastError = ""
+	w.state.Meta.IdentityUpdatedAt = now
+	w.state.Meta.UpdatedAt = now
+	w.cacheMu.Unlock()
 }
 
 func (w *Worker) SIMIdentityAllowsOverviewFallback() bool {
@@ -238,6 +279,15 @@ func (w *Worker) SIMIdentitySuppressesOverviewIMSI() bool {
 	defer w.cacheMu.RUnlock()
 	return w.state.Identity.Phase == simIdentityPhaseTransitioning ||
 		w.state.Identity.Phase == simIdentityPhaseDegraded
+}
+
+func (w *Worker) SIMIdentityPhase() string {
+	if w == nil {
+		return ""
+	}
+	w.cacheMu.RLock()
+	defer w.cacheMu.RUnlock()
+	return w.state.Identity.Phase
 }
 
 func (w *Worker) SIMIdentityConvergenceMatches(targetICCID string, generation uint64) bool {
@@ -429,12 +479,61 @@ func (w *Worker) mergeRuntimeStateLocked(status modem.DeviceStatus, healthy bool
 	}
 	w.state.Runtime.USBNetMode = status.USBNetMode
 	w.state.Runtime.OperatingMode = status.OperatingMode
+	w.markRuntimeUpdatedLocked(healthy)
+	return true
+}
+
+func (w *Worker) mergeRuntimeSampleLocked(sample runtimeStatusSample, healthy bool) bool {
+	if !sample.valid() {
+		return false
+	}
+	status := sample.status
+	if sample.imeiValid && strings.TrimSpace(status.IMEI) != "" {
+		w.state.Identity.IMEI = strings.TrimSpace(status.IMEI)
+	}
+	if sample.full || sample.firmwareValid {
+		w.state.Runtime.Firmware = status.Firmware
+	}
+	if sample.full || sample.signalValid {
+		w.state.Runtime.SignalDBM = status.SignalDBM
+		w.state.Runtime.SignalRSRP = status.SignalRSRP
+		w.state.Runtime.SignalRSRQ = status.SignalRSRQ
+		w.state.Runtime.SignalSINR = status.SignalSINR
+		w.state.Runtime.NR5GSignalSINR = status.NR5GSignalSINR
+	}
+	if sample.full || sample.servingValid {
+		w.state.Runtime.Operator = status.Operator
+		w.state.Runtime.NetworkMode = status.NetworkMode
+		w.state.Runtime.NetworkDuplex = status.NetworkDuplex
+		w.state.Runtime.RadioBand = status.RadioBand
+		w.state.Runtime.RadioChannel = status.RadioChannel
+		w.state.Runtime.RegStatus = status.RegStatus
+		w.state.Runtime.RegStatusText = status.RegStatusText
+		w.state.Runtime.PSAttached = status.PSAttached
+		w.state.Runtime.LAC = status.LAC
+		w.state.Runtime.CellID = status.CellID
+	}
+	if sample.full || sample.simValid {
+		w.state.Runtime.SimInserted = status.SimInserted
+	}
+	if sample.full {
+		w.state.Runtime.APN = status.APN
+		w.state.Runtime.IMSStatus = status.IMSStatus
+		w.state.Runtime.USBNetMode = status.USBNetMode
+	}
+	if sample.full || sample.modeValid {
+		w.state.Runtime.OperatingMode = status.OperatingMode
+	}
+	w.markRuntimeUpdatedLocked(healthy)
+	return true
+}
+
+func (w *Worker) markRuntimeUpdatedLocked(healthy bool) {
 	w.state.Runtime.Ready = true
 	now := time.Now()
 	w.state.Meta.Healthy = healthy
 	w.state.Meta.RuntimeUpdatedAt = now
 	w.state.Meta.UpdatedAt = now
-	return true
 }
 
 // CurrentICCID 取当前有效的 ICCID，兼容切换态

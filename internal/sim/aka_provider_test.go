@@ -23,7 +23,6 @@ func (s *akaWithPreferenceProviderStub) CalculateAKAWithPreference(rand16, autn1
 }
 
 type akaProviderModemFake struct {
-	basicErr         error
 	logicalCalls     []string
 	logicalAIDs      []string
 	logicalClosed    []int

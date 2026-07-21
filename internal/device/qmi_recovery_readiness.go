@@ -43,6 +43,9 @@ func (p *Pool) convergeQMIIdentity(ctx context.Context, worker *Worker, reason s
 
 	transportFailures := 0
 	for {
+		if !p.isCurrentWorker(worker) {
+			return context.Canceled
+		}
 		err := convergeIdentityRefreshFn(p, worker, reason)
 		if err == nil {
 			worker.RecordWatchdogEvent(WatchdogEvent{
@@ -98,6 +101,9 @@ func (p *Pool) startQMIIdentityConvergence(worker *Worker, reason string) {
 	if p == nil || worker == nil {
 		return
 	}
+	if !p.isCurrentWorker(worker) || !worker.qmiConverging.CompareAndSwap(false, true) {
+		return
+	}
 	worker.RecordWatchdogEvent(WatchdogEvent{
 		Layer:     HealthLayerQMI,
 		State:     HealthStateRecovering,
@@ -105,11 +111,12 @@ func (p *Pool) startQMIIdentityConvergence(worker *Worker, reason string) {
 		Reason:    reason,
 	})
 	go func() {
+		defer worker.qmiConverging.Store(false)
 		ctx, cancel := context.WithTimeout(p.ctx, qmiIdentityConvergenceTimeout)
 		defer cancel()
 		if err := p.convergeQMIIdentity(ctx, worker, reason); err != nil {
 			logger.Warn("QMI 身份收敛未完成", "device", worker.ID, "reason", reason, "err", err)
-		} else {
+		} else if p.isCurrentWorker(worker) {
 			p.resolveAndApplyPolicy(worker, "identity_ready")
 		}
 	}()

@@ -17,7 +17,6 @@ type UdevWatcher struct {
 
 	// 防抖相关
 	debounce  time.Duration
-	pending   bool
 	pendingMu sync.Mutex
 	timer     *time.Timer
 }
@@ -99,10 +98,8 @@ func (w *UdevWatcher) scheduleRescan() {
 		return
 	}
 
-	w.pending = true
 	w.timer = time.AfterFunc(w.debounce, func() {
 		w.pendingMu.Lock()
-		w.pending = false
 		w.timer = nil
 		w.pendingMu.Unlock()
 

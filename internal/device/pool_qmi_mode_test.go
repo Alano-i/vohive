@@ -486,6 +486,19 @@ func TestDeriveESIMTransportDefaultsToATForHybridQMIBackend(t *testing.T) {
 	}
 }
 
+func TestHybridQMIWorkerStartsAuxiliaryATRuntime(t *testing.T) {
+	cfg := config.DeviceConfig{
+		DeviceBackend: "qmi",
+		ATPort:        "/dev/ttyUSB10",
+	}
+	if !workerNeedsATRuntime(cfg) {
+		t.Fatal("DJI QMI worker with an AT port must keep the auxiliary AT runtime active")
+	}
+	if workerNeedsATRuntime(config.DeviceConfig{DeviceBackend: "qmi"}) {
+		t.Fatal("QMI worker without an AT attachment cannot start an auxiliary AT runtime")
+	}
+}
+
 func TestHybridQMIWorkerUsesATForStartupUICCCleanup(t *testing.T) {
 	w := &Worker{
 		Config: config.DeviceConfig{
@@ -607,6 +620,73 @@ func TestMergeRuntimeStatePreservesRadioFieldsOnPartialRefresh(t *testing.T) {
 	}
 	if status.NetworkDuplex != "FDD" || status.NetworkMode != "LTE" || status.RadioBand != "LTE BAND 8" || status.RadioChannel != 3740 {
 		t.Fatalf("partial refresh cleared radio access details: %+v", status)
+	}
+}
+
+func TestMergeRuntimeSampleAppliesSuccessfulZeroValues(t *testing.T) {
+	worker := &Worker{ID: "dev-qmi"}
+	worker.state.Runtime.SimInserted = true
+	worker.state.Runtime.Operator = "Old Carrier"
+	worker.state.Runtime.NetworkMode = "LTE"
+	worker.state.Runtime.RadioBand = "LTE BAND 8"
+	worker.state.Runtime.RadioChannel = 3740
+	worker.state.Runtime.RegStatus = 5
+	worker.state.Runtime.RegStatusText = "已注册(漫游)"
+	worker.state.Runtime.PSAttached = true
+	worker.state.Runtime.SignalDBM = -79
+
+	worker.mergeRuntimeSampleLocked(runtimeStatusSample{
+		status:       modem.DeviceStatus{},
+		signalValid:  true,
+		servingValid: true,
+		simValid:     true,
+	}, true)
+
+	status := worker.ProjectDeviceStatus()
+	if status.SimInserted {
+		t.Fatal("SimInserted=true, want false from successful SIM query")
+	}
+	if status.Operator != "" || status.NetworkMode != "" || status.RadioBand != "" || status.RadioChannel != 0 {
+		t.Fatalf("stale serving state retained: %+v", status)
+	}
+	if status.RegStatus != 0 || status.RegStatusText != "" || status.PSAttached {
+		t.Fatalf("stale registration state retained: %+v", status)
+	}
+	if status.SignalDBM != 0 {
+		t.Fatalf("SignalDBM=%d want 0 from successful signal query", status.SignalDBM)
+	}
+}
+
+func TestBeginSIMIdentityTransitionClearsPreviousProfileRuntime(t *testing.T) {
+	mode := int(backend.ModeOnline)
+	worker := &Worker{ID: "dev-esim"}
+	worker.state.Identity.IMEI = "866069053316632"
+	worker.state.Identity.ICCID = "old-iccid"
+	worker.state.Identity.IMSI = "old-imsi"
+	worker.state.Runtime.Firmware = "firmware-1"
+	worker.state.Runtime.SimInserted = true
+	worker.state.Runtime.USBNetMode = 0
+	worker.state.Runtime.OperatingMode = &mode
+	worker.state.Runtime.Operator = "Old Carrier"
+	worker.state.Runtime.NetworkMode = "LTE"
+	worker.state.Runtime.RadioBand = "LTE BAND 8"
+	worker.state.Runtime.RegStatus = 5
+	worker.state.Runtime.PSAttached = true
+	worker.state.Runtime.SignalDBM = -79
+	worker.state.Runtime.APN = "old-apn"
+	worker.state.Runtime.IMSStatus = 1
+
+	worker.BeginSIMIdentityTransition("target-iccid", "test")
+	status := worker.ProjectDeviceStatus()
+
+	if status.ICCID != "" || status.IMSI != "" || status.Operator != "" || status.NetworkMode != "" || status.RadioBand != "" {
+		t.Fatalf("previous profile state retained during transition: %+v", status)
+	}
+	if status.RegStatus != 0 || status.PSAttached || status.SignalDBM != 0 || status.APN != "" || status.IMSStatus != 0 {
+		t.Fatalf("previous profile runtime retained during transition: %+v", status)
+	}
+	if status.IMEI != "866069053316632" || status.Firmware != "firmware-1" || !status.SimInserted || status.OperatingMode == nil {
+		t.Fatalf("device-level runtime was cleared during profile transition: %+v", status)
 	}
 }
 

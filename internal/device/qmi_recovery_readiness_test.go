@@ -44,6 +44,9 @@ func TestConvergeQMIIdentityEscalatesOnPersistentTransportDown(t *testing.T) {
 	p := NewPool(&config.Config{})
 	defer p.cancel()
 	w := &Worker{ID: "dev-1", stop: make(chan struct{})}
+	p.mu.Lock()
+	p.workers[w.ID] = w
+	p.mu.Unlock()
 
 	err := p.convergeQMIIdentity(context.Background(), w, "manual_reboot")
 	if err == nil {
@@ -81,6 +84,9 @@ func TestConvergeQMIIdentityEscalatesOnTimeout(t *testing.T) {
 	p := NewPool(&config.Config{})
 	defer p.cancel()
 	w := &Worker{ID: "dev-1", stop: make(chan struct{})}
+	p.mu.Lock()
+	p.workers[w.ID] = w
+	p.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()

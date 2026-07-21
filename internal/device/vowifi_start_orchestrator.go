@@ -147,7 +147,7 @@ func (p *Pool) prepareVoWiFiStartContext(deviceID, traceID, runtimeEPDGOverride 
 	identityReady := w.state.Identity.Ready
 	w.cacheMu.RUnlock()
 	if !identityReady {
-		if err := w.RefreshIdentityLive(nil, "enable_vowifi"); err != nil {
+		if err := w.RefreshIdentityLive(context.Background(), "enable_vowifi"); err != nil {
 			logger.Error("VoWiFi 启动前刷新当前设备身份失败",
 				"trace_id", traceID,
 				"device", deviceID,

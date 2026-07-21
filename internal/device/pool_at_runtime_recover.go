@@ -105,6 +105,10 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 		nextModem.Stop()
 		return fmt.Errorf("启动 AT 管理器失败: %w", err)
 	}
+	if !p.isCurrentWorker(worker) {
+		nextModem.Stop()
+		return fmt.Errorf("设备运行时已变化，请重试")
+	}
 
 	oldBackend := worker.Backend
 	nextBackend := oldBackend
@@ -116,24 +120,40 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 		}
 	}
 
-	oldModem := worker.Modem
-	worker.Modem = nextModem
-	worker.Backend = nextBackend
-	worker.Config.ATPort = port
-	worker.Config.ManagePort = port
-
 	onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase := p.newESIMSwitchCallbacks(worker.ID)
-	nextESIMMgr, err := newESIMManagerForWorker(worker, worker.ESIMQMITransport, onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase)
+	runtimeWorker := &Worker{
+		ID:               worker.ID,
+		Config:           cfg,
+		Modem:            nextModem,
+		Backend:          nextBackend,
+		ESIMQMITransport: worker.ESIMQMITransport,
+		APDUArbiter:      worker.APDUArbiter,
+	}
+	nextESIMMgr, err := newESIMManagerForWorker(runtimeWorker, worker.ESIMQMITransport, onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase)
 	if err != nil {
-		worker.Modem = oldModem
-		worker.Backend = oldBackend
 		if replaceBackend && nextBackend != nil {
 			_ = nextBackend.Close()
 		}
 		nextModem.Stop()
 		return fmt.Errorf("重建 eSIM 管理器失败: %w", err)
 	}
+
+	p.mu.Lock()
+	if current := p.workers[worker.ID]; current != worker {
+		p.mu.Unlock()
+		if replaceBackend && nextBackend != nil {
+			_ = nextBackend.Close()
+		}
+		nextModem.Stop()
+		return fmt.Errorf("设备运行时已变化，请重试")
+	}
+	oldModem := worker.Modem
+	worker.Modem = nextModem
+	worker.Backend = nextBackend
+	worker.Config.ATPort = port
+	worker.Config.ManagePort = port
 	worker.EsimMgr = nextESIMMgr
+	p.mu.Unlock()
 	p.bindModemReadyIndications(worker)
 
 	if replaceBackend && oldBackend != nil {

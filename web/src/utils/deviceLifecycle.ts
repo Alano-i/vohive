@@ -67,17 +67,11 @@ export function primaryLifecycleStatus(device: DeviceLike | null | undefined) {
 	if (isSIMMissing(device)) {
     return { label: '离线', tag: 'danger' as const, tone: 'danger' as const, animated: false }
 	}
-	// QMI core is an internal control-plane dependency. When the user has
-	// explicitly disabled data, its background convergence must not be shown as
-	// if the data network were starting.
-	if (phase === 'qmi_starting' && device.network_enabled === false) {
-		return { label: '在线', tag: 'success' as const, tone: 'success' as const, animated: true }
+	if (isRecoveryPhase(phase)) {
+		return { label: lifecycleStatusLabel(phase) || '恢复中', tag: 'warning' as const, tone: 'warning' as const, animated: true }
 	}
 	if (isRadioRegistered(device) && (device.control_online ?? device.healthy) === true) {
 		return { label: '在线', tag: 'success' as const, tone: 'success' as const, animated: true }
-	}
-	if (isRecoveryPhase(phase)) {
-		return { label: lifecycleStatusLabel(phase) || '恢复中', tag: 'warning' as const, tone: 'warning' as const, animated: true }
 	}
   if (phase === 'degraded') {
     return { label: '不稳定', tag: 'warning' as const, tone: 'warning' as const, animated: true }

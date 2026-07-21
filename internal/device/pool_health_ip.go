@@ -89,12 +89,51 @@ func workerUsesQMIHealthPolicy(worker *Worker) bool {
 	return worker.QMICore != nil || requiresQMICore(worker.Config)
 }
 
+func workerQMIControlReadyForWork(worker *Worker) bool {
+	if worker == nil {
+		return false
+	}
+	if worker.QMICore == nil {
+		return true
+	}
+	return !worker.qmiStartRetrying.Load() && worker.QMICore.IsControlReady()
+}
+
+func (p *Pool) qmiHealthProbeBusy(worker *Worker) (bool, string) {
+	if worker == nil || !workerUsesQMIHealthPolicy(worker) {
+		return false, ""
+	}
+	if !workerQMIControlReadyForWork(worker) {
+		return true, "qmi_control_starting"
+	}
+	if p.IsESIMSwitching(worker.ID) {
+		return true, "esim_switching"
+	}
+	if remain := worker.healthRecoveryRemaining(time.Now()); remain > 0 {
+		return true, fmt.Sprintf("recovery_window(%s)", remain.Round(time.Second))
+	}
+	worker.qmiRegistrationMu.Lock()
+	registrationInFlight := worker.qmiRegistrationInFlight
+	worker.qmiRegistrationMu.Unlock()
+	if registrationInFlight {
+		return true, "registration_reconcile_in_flight"
+	}
+	if worker.runtimeRefreshBG.Load() {
+		return true, "runtime_refresh_in_flight"
+	}
+	return false, ""
+}
+
 func (p *Pool) runHealthCheckTick() bool {
 	workers := p.healthCheckWorkerSnapshot()
 	needRescan := false
 	for _, w := range workers {
 		p.refreshIPs(w, false)
 		w.cleanupFragmentCache(30 * time.Minute)
+		if busy, reason := p.qmiHealthProbeBusy(w); busy {
+			logger.Debug("QMI 控制面有协调任务在运行，跳过本轮主动探活", "device", w.ID, "reason", reason)
+			continue
+		}
 		healthy, healthErr := w.ProbeDeviceHealth()
 		w.setCachedHealthy(healthy)
 		if healthy {
@@ -245,10 +284,11 @@ func (p *Pool) healthCheckLoop() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	syncTicker := time.NewTicker(1 * time.Minute)
-	defer syncTicker.Stop()
-
-	sem := make(chan struct{}, 6)
+	// Offset runtime synchronization from the health probe. Starting two
+	// one-minute tickers together made both jobs hit the QMI control plane in
+	// the same scheduler turn on every cycle.
+	syncTimer := time.NewTimer(30 * time.Second)
+	defer syncTimer.Stop()
 
 	for {
 		select {
@@ -264,7 +304,8 @@ func (p *Pool) healthCheckLoop() {
 				}()
 			}
 
-		case <-syncTicker.C:
+		case <-syncTimer.C:
+			syncTimer.Reset(1 * time.Minute)
 			p.mu.RLock()
 			workers := make([]*Worker, 0, len(p.workers))
 			for _, w := range p.workers {
@@ -277,12 +318,10 @@ func (p *Pool) healthCheckLoop() {
 				if worker == nil {
 					continue
 				}
-				sem <- struct{}{}
 				go func() {
-					defer func() { <-sem }()
-
-					done := make(chan struct{})
-					go func() {
+					ctx, cancel := context.WithTimeout(p.ctx, 20*time.Second)
+					defer cancel()
+					started := worker.tryBackgroundRuntimeRefresh(ctx, "health_sync", func() {
 						isATMode := worker.Backend == nil || worker.Backend.Mode() == "at"
 						if isATMode && worker.Modem != nil {
 							worker.Modem.RefreshStatus(
@@ -298,18 +337,13 @@ func (p *Pool) healthCheckLoop() {
 								},
 							)
 						}
-						_ = worker.RefreshRuntime(nil, "health_sync")
+					})
+					if !started {
+						logger.Debug("设备状态同步已有任务在运行，跳过本轮", "device", worker.ID)
+						return
+					}
+					if p.isCurrentWorker(worker) {
 						p.PersistRuntimeState(worker)
-						if worker.Config.ESIMEnabled && worker.CurrentICCID() != "" {
-							p.prewarmActiveESIMProfileName(worker, "health_sync")
-						}
-						close(done)
-					}()
-
-					select {
-					case <-done:
-					case <-time.After(20 * time.Second):
-						logger.Warn("设备状态同步超时", "device", worker.ID)
 					}
 				}()
 			}
@@ -472,13 +506,15 @@ func (w *Worker) PreWarmCache() {
 	if w == nil {
 		return
 	}
-	_ = w.RefreshRuntime(nil, "prewarm")
-	_ = w.RefreshIdentityLive(nil, "prewarm")
-	if w.Pool != nil {
-		w.Pool.PersistRuntimeState(w)
-		w.Pool.PersistIdentityState(w)
+	if !workerQMIControlReadyForWork(w) {
+		logger.Debug(fmt.Sprintf("[%s] QMI 控制面尚未就绪，跳过运行态预热", w.ID))
+		return
 	}
-	logger.Info(fmt.Sprintf("[%s] 设备冷启动预热完毕", w.ID))
+	_ = w.RefreshRuntime(context.Background(), "prewarm")
+	if w.Pool != nil && w.Pool.isCurrentWorker(w) {
+		w.Pool.PersistRuntimeState(w)
+	}
+	logger.Info(fmt.Sprintf("[%s] 设备运行态冷启动预热完毕", w.ID))
 }
 
 func (w *Worker) clearCachedIP() {

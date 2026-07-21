@@ -51,7 +51,7 @@ func (s *Server) handleDeviceMgmtOperatorScan(c *gin.Context) {
 		return
 	}
 
-	status, body := operatorScanHTTPStatusAndBody(w.StartOrGetOperatorScan(c.Request.Context()))
+	status, body := operatorScanHTTPStatusAndBody(w.StartOrGetOperatorScan())
 	c.JSON(status, body)
 }
 
@@ -97,7 +97,7 @@ func (s *Server) handleDeviceMgmtOperatorScanStream(c *gin.Context) {
 		return operatorScanSSEShouldContinue(result)
 	}
 
-	if !send(w.StartOrGetOperatorScan(c.Request.Context())) {
+	if !send(w.StartOrGetOperatorScan()) {
 		return
 	}
 

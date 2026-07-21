@@ -2343,6 +2343,10 @@ func (m *Manager) WaitControlReady(ctx context.Context) error {
 	return m.qmiMgr.WaitControlReady(ctx)
 }
 
+func (m *Manager) IsControlReady() bool {
+	return m != nil && m.qmiMgr != nil && m.qmiMgr.IsControlReady()
+}
+
 // WaitIdentityReady waits until QMI identity convergence is complete.
 func (m *Manager) WaitIdentityReady(ctx context.Context) error {
 	if m == nil || m.qmiMgr == nil {

@@ -198,7 +198,10 @@ func (m *Manager) disableRuntime(ctx context.Context, reasonDeviceID, reason str
 		return fmt.Errorf("vowifi host adapter is not configured")
 	}
 	if ctx == nil {
-		ctx = hostContext(nil, adapter)
+		ctx = adapter.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
 	}
 	if strings.TrimSpace(reason) == "" {
 		reason = "disable"

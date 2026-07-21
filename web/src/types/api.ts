@@ -87,6 +87,7 @@ export type DeviceOverviewItem = {
   control_device?: string
   esim_transport?: string
   esim_enabled?: boolean
+  sim_identity_phase?: 'ready' | 'transitioning' | 'degraded'
   at_port?: string
   usb_path?: string
   vendor_id?: number
@@ -129,11 +130,13 @@ export type DeviceMgmtListItem = {
   device_backend?: 'at' | 'qmi' | 'mbim'
   esim_transport?: string
   esim_enabled?: boolean
+  sim_identity_phase?: 'ready' | 'transitioning' | 'degraded'
   active_esim_profile_name?: string
   sms_enabled: boolean
   network_enabled: boolean
   airplane_enabled?: boolean
   vowifi_enabled?: boolean
+  vowifi_active?: boolean
   vowifi_runtime?: VoWiFiRuntimeState
   modem?: Pick<ModemStatus, 'operator' | 'native_spn' | 'native_mcc' | 'native_mnc' | 'network_mode' | 'network_duplex' | 'radio_band' | 'radio_channel' | 'signal_dbm' | 'signal_sinr' | 'imei' | 'iccid' | 'sim_inserted' | 'reg_status'>
 }

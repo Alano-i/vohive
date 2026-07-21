@@ -20,8 +20,9 @@ func TestBindMBIMStateIndicationsTriggersHandleSIMStatusEvent(t *testing.T) {
 	}
 	defer mc.Close()
 
-	p := &Pool{ctx: context.Background()}
+	p := &Pool{ctx: context.Background(), workers: make(map[string]*Worker)}
 	w := &Worker{ID: "dev1", MBIMCore: mc}
+	p.workers[w.ID] = w
 	p.bindMBIMStateIndications(w)
 
 	info := mbim.TestSubscriberReadyInfo(1, "460001234567890", "89860012345678901234")
@@ -59,8 +60,9 @@ func TestBindMBIMSlotIndicationsWakesVoWiFiWithoutTouchingEsimMgr(t *testing.T) 
 	}
 	defer mc.Close()
 
-	p := &Pool{ctx: context.Background()}
+	p := &Pool{ctx: context.Background(), workers: make(map[string]*Worker)}
 	w := &Worker{ID: "dev1", MBIMCore: mc}
+	p.workers[w.ID] = w
 	p.bindMBIMSlotIndications(w)
 
 	info := mbim.TestSlotInfoStatusInfo(0, mbim.UICCSlotStateActiveEsim)
@@ -98,8 +100,9 @@ func TestBindMBIMHealthIndicationsRecordsHealthyAndSuspect(t *testing.T) {
 	}
 	defer mc.Close()
 
-	p := &Pool{ctx: context.Background()}
+	p := &Pool{ctx: context.Background(), workers: make(map[string]*Worker)}
 	w := &Worker{ID: "dev1", MBIMCore: mc}
+	p.workers[w.ID] = w
 	p.bindMBIMHealthIndications(w)
 
 	deadline := time.Now().Add(3 * time.Second)

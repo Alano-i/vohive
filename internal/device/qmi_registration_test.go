@@ -662,6 +662,54 @@ func TestQMIRegistrationReconcileAsyncAllowsOnlyOneInFlightPerWorker(t *testing.
 	}
 }
 
+func TestCancelQMIRegistrationStopsOldProfileReconcile(t *testing.T) {
+	w := &Worker{ID: "dev-qmi", stop: make(chan struct{})}
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+
+	if !w.startQMIRegistrationReconcile(context.Background(), "old_profile", func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		return ctx.Err()
+	}) {
+		t.Fatal("old profile reconcile did not start")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("old profile reconcile start timed out")
+	}
+
+	done := w.cancelQMIRegistration()
+	if done == nil {
+		t.Fatal("cancelQMIRegistration returned nil for active reconcile")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("old profile reconcile did not observe cancellation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("old profile reconcile ownership was not released")
+	}
+
+	secondStarted := make(chan struct{})
+	if !w.startQMIRegistrationReconcile(context.Background(), "new_profile", func(context.Context) error {
+		close(secondStarted)
+		return nil
+	}) {
+		t.Fatal("new profile reconcile should start after cancellation")
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("new profile reconcile did not start")
+	}
+}
+
 type fakeProvisioningSIM struct {
 	statuses []qmi.SIMStatus
 	idx      int

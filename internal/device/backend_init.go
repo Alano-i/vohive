@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/iniwex5/vohive/internal/backend"
+	"github.com/iniwex5/vohive/internal/config"
 	"github.com/iniwex5/vohive/internal/modem"
 )
 
@@ -24,3 +25,14 @@ func backendUsesATRuntime(mode string) bool {
 	return backend.NormalizeBackendMode(mode) == backend.BackendAT
 }
 
+// workerNeedsATRuntime reflects the DJI runtime model: QMI owns data and radio
+// control, while the auxiliary AT port remains open for eSIM/APDU and diagnostics.
+func workerNeedsATRuntime(cfg config.DeviceConfig) bool {
+	if backendUsesATRuntime(resolvedBackendMode(cfg)) {
+		return true
+	}
+	if strings.TrimSpace(cfg.ATPort) == "" && strings.TrimSpace(cfg.ManagePort) == "" {
+		return false
+	}
+	return deriveESIMTransport(cfg) == config.ESIMTransportAT
+}

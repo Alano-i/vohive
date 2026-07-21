@@ -37,7 +37,7 @@ func TestApplyLifecycleToOfflineOverviewItemKeepsRecoveryVisible(t *testing.T) {
 	}
 }
 
-func TestApplyLifecycleToListItemDerivesRadioRegistered(t *testing.T) {
+func TestApplyLifecycleToListItemKeepsActiveRecoveryVisible(t *testing.T) {
 	pool := device.NewPool(&config.Config{})
 	pool.MarkLifecycleRecovery("dev1", device.LifecyclePhaseQMIStarting, "startup", 3*time.Minute)
 	server := &Server{pool: pool}
@@ -59,8 +59,19 @@ func TestApplyLifecycleToListItemDerivesRadioRegistered(t *testing.T) {
 	if !item.DataConnected {
 		t.Fatal("DataConnected=false want true when network is connected")
 	}
-	if item.LifecyclePhase != string(device.LifecyclePhaseOnline) {
-		t.Fatalf("LifecyclePhase=%q want %q", item.LifecyclePhase, device.LifecyclePhaseOnline)
+	if item.LifecyclePhase != string(device.LifecyclePhaseQMIStarting) {
+		t.Fatalf("LifecyclePhase=%q want %q", item.LifecyclePhase, device.LifecyclePhaseQMIStarting)
+	}
+}
+
+func TestLifecyclePhaseForAPIRejectsOnlineWhenControlIsDown(t *testing.T) {
+	snap := device.LifecycleSnapshot{Phase: device.LifecyclePhaseOnline, Reason: "control_online"}
+	phase := lifecyclePhaseForAPI(snap, true, false)
+	if phase != string(device.LifecyclePhaseRecovering) {
+		t.Fatalf("phase=%q want %q", phase, device.LifecyclePhaseRecovering)
+	}
+	if reason := lifecycleReasonForAPI(snap, phase); reason != "control_not_ready" {
+		t.Fatalf("reason=%q want control_not_ready", reason)
 	}
 }
 

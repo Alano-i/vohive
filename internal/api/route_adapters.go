@@ -82,7 +82,7 @@ func (s *Server) handleDeviceNetworkPatch(c *gin.Context) {
 
 		worker, nc, statusCode, startErr := s.startDeviceNetwork(deviceID)
 		if startErr == nil {
-			go func() { _ = worker.RefreshRuntime(nil, "start_network") }()
+			go func() { _ = worker.RefreshRuntime(context.Background(), "start_network") }()
 			c.JSON(http.StatusOK, gin.H{
 				"status": "ok", "message": "数据网络已启动", "device": deviceID,
 				"network_connected": worker.NetworkConnected(),

@@ -152,39 +152,6 @@ func stringPtr(v string) *string {
 	return &v
 }
 
-type deviceMgmtOverviewItem struct {
-	ID                     string             `json:"id"`
-	Name                   string             `json:"name"`
-	Running                bool               `json:"running"`
-	Healthy                bool               `json:"healthy"`
-	ControlOnline          bool               `json:"control_online"`
-	PhysicalPresent        bool               `json:"physical_present"`
-	WorkerRunning          bool               `json:"worker_running"`
-	DataConnected          bool               `json:"data_connected"`
-	RadioRegistered        bool               `json:"radio_registered"`
-	LifecyclePhase         string             `json:"lifecycle_phase"`
-	LifecycleReason        string             `json:"lifecycle_reason,omitempty"`
-	PrivateIP              string             `json:"private_ip,omitempty"`
-	PrivateIPv6            string             `json:"private_ipv6,omitempty"`
-	PublicIP               string             `json:"public_ip"`
-	PublicIPv6             string             `json:"public_ipv6,omitempty"`
-	Config                 *deviceConfigDTO   `json:"config,omitempty"`
-	Modem                  modem.DeviceStatus `json:"modem"`
-	Traffic                map[string]string  `json:"traffic,omitempty"`
-	TrafficRaw             map[string]int64   `json:"traffic_raw,omitempty"`
-	TrafficMeta            *deviceTrafficMeta `json:"traffic_meta,omitempty"`
-	BackendMode            string             `json:"backend_mode,omitempty"`
-	NetworkConnected       bool               `json:"network_connected"`
-	RegistrationStateLabel string             `json:"registration_state_label"`
-	// Interface / ControlDevice / ATPort / USBPath 是 worker 运行时解析出的当前路径
-	// (零路径持久化后不入库),前端据此显示与判定 QMI 后端可用性、流量接口,
-	// 不再依赖持久化 config 的路径字段。
-	Interface     string `json:"interface,omitempty"`
-	ControlDevice string `json:"control_device,omitempty"`
-	ATPort        string `json:"at_port,omitempty"`
-	USBPath       string `json:"usb_path,omitempty"`
-}
-
 func modemSummaryStatus(status modem.DeviceStatus) modem.DeviceStatus {
 	status.GID1 = ""
 	status.GID2 = ""
@@ -248,104 +215,6 @@ func overviewDisplayConfig(runtime, persisted config.DeviceConfig, hasPersisted 
 	return cfg
 }
 
-func (s *Server) handleDeviceMgmtOverview(c *gin.Context) {
-	includeConfig := strings.TrimSpace(c.DefaultQuery("include_config", "1")) != "0"
-	workers := s.pool.GetAllWorkers()
-	managed := config.ListDevices()
-	cfgByID := map[string]config.DeviceConfig{}
-	for _, d := range managed {
-		cfgByID[d.ID] = d
-	}
-	tagByID := map[string]string{}
-	tags := make([]string, 0, len(workers))
-	for _, w := range workers {
-		cfg := w.Config
-		if v, ok := cfgByID[w.ID]; ok {
-			cfg = overviewDisplayConfig(w.Config, v, true)
-		}
-		if cfg.Interface == "" {
-			continue
-		}
-		tag := w.ID + "@" + cfg.Interface
-		tagByID[w.ID] = tag
-		tags = append(tags, tag)
-	}
-	byTag, _ := db.GetLatestMinuteDeltasBatch("iface", tags)
-	now := time.Now()
-
-	workerByID := map[string]bool{}
-	items := make([]deviceMgmtOverviewItem, 0, len(workers))
-	for _, w := range workers {
-		workerByID[w.ID] = true
-		cfg := w.Config
-		if v, ok := cfgByID[w.ID]; ok {
-			cfg = overviewDisplayConfig(w.Config, v, true)
-		}
-		status := w.GetCachedDeviceStatus() // 设备管理总览列表读缓存，0 IPC
-		controlOnline := w.GetCachedHealthy()
-		item := deviceMgmtOverviewItem{
-			ID:                     w.ID,
-			Name:                   cfg.Name,
-			Running:                true,
-			Healthy:                controlOnline, // 兼容旧客户端：healthy 表示控制面在线
-			ControlOnline:          controlOnline,
-			PublicIP:               w.GetCachedIP(),
-			PublicIPv6:             w.GetCachedIPv6(),
-			Modem:                  modemSummaryStatus(status),
-			NetworkConnected:       w.NetworkConnected(),
-			RegistrationStateLabel: registrationStateLabel(status.RegStatus),
-			BackendMode: func() string {
-				if w.Backend != nil {
-					return w.Backend.Mode()
-				}
-				return "at"
-			}(),
-		}
-		item.Interface = cfg.Interface
-		item.ControlDevice = cfg.ControlDevice
-		item.ATPort = w.ResolvedATPort()
-		item.USBPath = cfg.USBPath
-		if includeConfig {
-			dto := deviceConfigToDTO(cfg)
-			item.Config = &dto
-		}
-		if nc := w.NetworkController(); nc != nil {
-			item.PrivateIP = nc.GetPrivateIP()
-			item.PrivateIPv6 = nc.GetPrivateIPv6()
-		}
-		item.Traffic, item.TrafficRaw, item.TrafficMeta = buildTrafficOverviewFields(cfg.Interface, byTag[tagByID[w.ID]], now)
-		s.applyLifecycleToOverviewItem(&item, true, cfg)
-		items = append(items, item)
-	}
-	for _, dc := range managed {
-		if workerByID[dc.ID] {
-			continue
-		}
-		var cfgDTO *deviceConfigDTO
-		if includeConfig {
-			dto := deviceConfigToDTO(dc)
-			cfgDTO = &dto
-		}
-		item := deviceMgmtOverviewItem{
-			ID:                     dc.ID,
-			Name:                   dc.Name,
-			Running:                false,
-			Healthy:                false,
-			ControlOnline:          false,
-			PublicIP:               "",
-			Config:                 cfgDTO,
-			Modem:                  modem.DeviceStatus{},
-			Traffic:                nil,
-			BackendMode:            resolveOfflineBackendMode(dc),
-			NetworkConnected:       false,
-			RegistrationStateLabel: registrationStateLabel(0),
-		}
-		s.applyLifecycleToOverviewItem(&item, false, dc)
-		items = append(items, item)
-	}
-	c.JSON(http.StatusOK, gin.H{"devices": items})
-}
-
 type deviceMgmtOverviewLiteItem struct {
 	ID                     string             `json:"id"`
 	Name                   string             `json:"name"`
@@ -366,6 +235,7 @@ type deviceMgmtOverviewLiteItem struct {
 	ControlDevice          string             `json:"control_device,omitempty"`
 	ESIMTransport          string             `json:"esim_transport,omitempty"`
 	ESIMEnabled            bool               `json:"esim_enabled"`
+	SIMIdentityPhase       string             `json:"sim_identity_phase,omitempty"`
 	ATPort                 string             `json:"at_port,omitempty"`
 	USBPath                string             `json:"usb_path,omitempty"`
 	VendorID               uint16             `json:"vendor_id,omitempty"`
@@ -428,11 +298,13 @@ type deviceMgmtListItem struct {
 	DeviceBackend          string              `json:"device_backend,omitempty"`
 	ESIMTransport          string              `json:"esim_transport,omitempty"`
 	ESIMEnabled            bool                `json:"esim_enabled"`
+	SIMIdentityPhase       string              `json:"sim_identity_phase,omitempty"`
 	ActiveESIMProfileName  string              `json:"active_esim_profile_name,omitempty"`
 	SMSEnabled             bool                `json:"sms_enabled"`
 	NetworkEnabled         bool                `json:"network_enabled"`
 	AirplaneEnabled        bool                `json:"airplane_enabled"`
 	VoWiFiEnabled          bool                `json:"vowifi_enabled"`
+	VoWiFiActive           bool                `json:"vowifi_active"`
 	VoWiFiRuntime          *voWiFiRuntimeDTO   `json:"vowifi_runtime,omitempty"`
 	Modem                  deviceMgmtListModem `json:"modem"`
 	NetworkConnected       bool                `json:"network_connected"`
@@ -522,31 +394,20 @@ func lifecycleSnapshotForAPI(pool *device.Pool, deviceID string) device.Lifecycl
 
 func lifecyclePhaseForAPI(snap device.LifecycleSnapshot, workerRunning bool, controlOnline bool) string {
 	phase := lifecyclePhaseString(snap)
-	if workerRunning && controlOnline {
-		switch phase {
-		case string(device.LifecyclePhaseOffline),
-			string(device.LifecyclePhaseUSBWait),
-			string(device.LifecyclePhaseWorkerStarting),
-			string(device.LifecyclePhaseQMIStarting),
-			string(device.LifecyclePhaseRecovering):
-			return string(device.LifecyclePhaseOnline)
-		}
+	if workerRunning && controlOnline && phase == string(device.LifecyclePhaseOffline) {
+		return string(device.LifecyclePhaseOnline)
+	}
+	if workerRunning && !controlOnline && phase == string(device.LifecyclePhaseOnline) {
+		return string(device.LifecyclePhaseRecovering)
 	}
 	return phase
 }
 
-func (s *Server) applyLifecycleToOverviewItem(item *deviceMgmtOverviewItem, workerRunning bool, cfg config.DeviceConfig) {
-	if item == nil {
-		return
+func lifecycleReasonForAPI(snap device.LifecycleSnapshot, phase string) string {
+	if phase == string(device.LifecyclePhaseRecovering) && snap.Phase == device.LifecyclePhaseOnline {
+		return "control_not_ready"
 	}
-	snap := lifecycleSnapshotForAPI(s.pool, cfg.ID)
-	phase := lifecyclePhaseForAPI(snap, workerRunning, item.ControlOnline)
-	item.WorkerRunning = workerRunning
-	item.DataConnected = item.NetworkConnected
-	item.RadioRegistered = item.Modem.RegStatus == 1 || item.Modem.RegStatus == 5
-	item.LifecyclePhase = phase
-	item.LifecycleReason = snap.Reason
-	item.PhysicalPresent = workerRunning || isLifecycleActiveForAPI(phase)
+	return snap.Reason
 }
 
 func (s *Server) applyLifecycleToListItem(item *deviceMgmtListItem, workerRunning bool, cfg config.DeviceConfig) {
@@ -559,7 +420,7 @@ func (s *Server) applyLifecycleToListItem(item *deviceMgmtListItem, workerRunnin
 	item.DataConnected = item.NetworkConnected
 	item.RadioRegistered = item.Modem.RegStatus == 1 || item.Modem.RegStatus == 5
 	item.LifecyclePhase = phase
-	item.LifecycleReason = snap.Reason
+	item.LifecycleReason = lifecycleReasonForAPI(snap, phase)
 	item.PhysicalPresent = workerRunning || isLifecycleActiveForAPI(phase)
 }
 
@@ -574,7 +435,7 @@ func (s *Server) applyLifecycleToOverviewLiteItem(item *deviceMgmtOverviewLiteIt
 	item.DataConnected = item.NetworkConnected
 	item.RadioRegistered = item.Modem.RegStatus == 1 || item.Modem.RegStatus == 5
 	item.LifecyclePhase = phase
-	item.LifecycleReason = snap.Reason
+	item.LifecycleReason = lifecycleReasonForAPI(snap, phase)
 	item.PhysicalPresent = workerRunning || isLifecycleActiveForAPI(phase)
 }
 
@@ -603,6 +464,7 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 		ControlDevice:          cfg.ControlDevice,
 		ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
 		ESIMEnabled:            cfg.ESIMEnabled,
+		SIMIdentityPhase:       w.SIMIdentityPhase(),
 		ATPort:                 w.ResolvedATPort(),
 		USBPath:                cfg.USBPath,
 		VendorID:               vendorID,
@@ -649,6 +511,7 @@ func activeESIMProfileName(w *device.Worker) string {
 
 type overviewStreamEmitVersion struct {
 	ActiveESIMProfileName string
+	SIMIdentityPhase      string
 	VoWiFiActive          bool
 	LifecyclePhase        string
 	LifecycleReason       string
@@ -663,6 +526,7 @@ type overviewStreamEmitVersion struct {
 func newOverviewStreamEmitVersion(item deviceMgmtOverviewLiteItem) overviewStreamEmitVersion {
 	v := overviewStreamEmitVersion{
 		ActiveESIMProfileName: item.ActiveESIMProfileName,
+		SIMIdentityPhase:      item.SIMIdentityPhase,
 		VoWiFiActive:          item.VoWiFiActive,
 		LifecyclePhase:        item.LifecyclePhase,
 		LifecycleReason:       item.LifecycleReason,
@@ -700,18 +564,6 @@ func effectiveOverviewIMSI(w *device.Worker, status modem.DeviceStatus) string {
 		return ""
 	}
 	return strings.TrimSpace(w.GetCachedIMSI())
-}
-
-func overviewLocalPhoneByIMSI(imsi string) string {
-	imsi = strings.TrimSpace(imsi)
-	if imsi == "" {
-		return ""
-	}
-	phone, err := db.GetSIMCardPhoneNumberByIMSI(imsi)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(phone)
 }
 
 func overviewLocalPhone(imsi, iccid string) string {
@@ -759,11 +611,13 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			DeviceBackend:          cfg.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
 			ESIMEnabled:            cfg.ESIMEnabled,
+			SIMIdentityPhase:       w.SIMIdentityPhase(),
 			ActiveESIMProfileName:  activeESIMProfileName(w),
 			SMSEnabled:             cfg.SMSEnabled,
 			NetworkEnabled:         cfg.NetworkEnabled,
 			AirplaneEnabled:        cfg.AirplaneEnabled,
-			VoWiFiEnabled:          s.pool.IsVoWiFiActive(w.ID), // 使用多设备状态查询
+			VoWiFiEnabled:          cardPolicyVoWiFiEnabled(strings.TrimSpace(status.ICCID), cfg.VoWiFiEnabled),
+			VoWiFiActive:           s.pool.IsVoWiFiActive(w.ID),
 			VoWiFiRuntime:          s.getVoWiFiRuntimeDTO(w.ID),
 			NetworkConnected:       w.NetworkConnected(),
 			RegistrationStateLabel: registrationStateLabel(status.RegStatus),
@@ -810,6 +664,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			NetworkEnabled:         dc.NetworkEnabled,
 			AirplaneEnabled:        dc.AirplaneEnabled,
 			VoWiFiEnabled:          false, // 非运行设备无活跃 VoWiFi
+			VoWiFiActive:           false,
 			NetworkConnected:       false,
 			RegistrationStateLabel: registrationStateLabel(0),
 			Modem:                  deviceMgmtListModem{},
@@ -1232,10 +1087,6 @@ type updateDeviceRequest struct {
 	Config deviceConfigDTO `json:"config"`
 }
 
-func hasManagedNetworkCapability(cfg config.DeviceConfig) bool {
-	return strings.TrimSpace(cfg.ControlDevice) != "" && strings.TrimSpace(cfg.Interface) != ""
-}
-
 func validateManagedNetworkConfig(cfg config.DeviceConfig) error {
 	if err := validateDeviceBackendConfig(cfg); err != nil {
 		return err
@@ -1425,7 +1276,6 @@ func (s *Server) handleDeviceMgmtUpdateDevice(c *gin.Context) {
 			warningMessage = joinWarningMessages(warningMessage, "原地切换运行模式失败，正在尝试完整重建: "+err.Error())
 		} else {
 			requiresRestart = false
-			worker = s.pool.GetWorker(id)
 		}
 	}
 	if needsRebuild {
@@ -1653,6 +1503,16 @@ func (s *Server) handleDeviceMgmtExecuteAT(c *gin.Context) {
 	}
 	if timeout > 60*time.Second {
 		timeout = 60 * time.Second
+	}
+
+	if worker.Modem != nil && worker.Modem.HasATPort() && worker.Modem.CanExecuteAT() {
+		resp, err := worker.Modem.ExecuteAT(cmd, timeout)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "response": resp})
+		return
 	}
 
 	if worker.Backend != nil && isTransientATBackend(worker.Backend.Mode()) {
@@ -2497,11 +2357,11 @@ func (s *Server) handleDeviceMgmtSetFlightMode(c *gin.Context) {
 		return
 	}
 	go func(disabled bool) {
-		_ = worker.RefreshRuntime(nil, "flight_mode_change")
+		_ = worker.RefreshRuntime(context.Background(), "flight_mode_change")
 		if !disabled {
 			// 切回在线后补一次延迟刷新，覆盖“先注册后PLMN”恢复窗口。
 			time.Sleep(3 * time.Second)
-			_ = worker.RefreshRuntime(nil, "flight_mode_recover")
+			_ = worker.RefreshRuntime(context.Background(), "flight_mode_recover")
 		}
 	}(!flightModeEnabled)
 
@@ -2527,26 +2387,38 @@ func sendWorkerReboot(ctx context.Context, worker *device.Worker, forceATFirst b
 	}
 	rebootSent := false
 	useATFirst := forceATFirst || worker.Backend == nil || shouldUseATFirstReboot(worker.Backend.Mode())
-
-	if useATFirst && worker.Modem != nil && worker.Modem.HasATPort() && worker.Modem.CanExecuteAT() {
+	tryAT := func() bool {
+		if worker.Modem == nil || !worker.Modem.HasATPort() || !worker.Modem.CanExecuteAT() {
+			return false
+		}
 		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", 20*time.Second)
 		if err == nil {
-			rebootSent = true
-		} else {
-			message := strings.ToLower(err.Error())
-			if strings.Contains(message, "timeout") || strings.Contains(message, "eof") || strings.Contains(message, "closed") || strings.Contains(message, "no such file") {
-				rebootSent = true
-			}
+			return true
 		}
+		message := strings.ToLower(err.Error())
+		return strings.Contains(message, "timeout") || strings.Contains(message, "eof") ||
+			strings.Contains(message, "closed") || strings.Contains(message, "no such file")
 	}
 
+	if useATFirst {
+		rebootSent = tryAT()
+	}
+
+	var backendErr error
 	if !rebootSent && worker.Backend != nil {
 		if err := worker.Backend.Reboot(ctx); err != nil {
-			return fmt.Errorf("重启指令失败: %w", err)
+			backendErr = err
+		} else {
+			rebootSent = true
 		}
-		rebootSent = true
+	}
+	if !rebootSent && !useATFirst {
+		rebootSent = tryAT()
 	}
 	if !rebootSent {
+		if backendErr != nil {
+			return fmt.Errorf("重启指令失败: %w", backendErr)
+		}
 		return errors.New("无法发送重启指令，无可用通道")
 	}
 	return nil
@@ -2567,7 +2439,8 @@ func (s *Server) handleDeviceMgmtReboot(c *gin.Context) {
 		return
 	}
 
-	if err := sendWorkerReboot(c.Request.Context(), worker, false); err != nil {
+	forceATFirst := worker.QMICore != nil && !worker.QMICore.IsControlReady()
+	if err := sendWorkerReboot(c.Request.Context(), worker, forceATFirst); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
 		return
 	}

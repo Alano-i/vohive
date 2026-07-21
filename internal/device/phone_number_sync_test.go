@@ -196,10 +196,10 @@ func TestStartupPostApplyPersistsLiveIdentityBeforePhoneNumber(t *testing.T) {
 	}
 	w.state.Identity.IMEI = "imei-startup-1"
 
-	if err := w.RefreshRuntime(nil, "startup_post_apply"); err != nil {
+	if err := w.RefreshRuntime(context.Background(), "startup_post_apply"); err != nil {
 		t.Fatalf("RefreshRuntime() error=%v", err)
 	}
-	if err := w.RefreshIdentityLive(nil, "startup_post_apply"); err != nil {
+	if err := w.RefreshIdentityLive(context.Background(), "startup_post_apply"); err != nil {
 		t.Fatalf("RefreshIdentityLive() error=%v", err)
 	}
 	p.PersistRuntimeState(w)
@@ -248,7 +248,7 @@ func TestRefreshIdentityLiveClearsNativeSPNWhenIdentityChangesToEmptySPN(t *test
 	w.state.Identity.ICCID = "8986000000000000001"
 	w.state.Identity.NativeSPN = "中国移动"
 
-	if err := w.RefreshIdentityLive(nil, "test_identity_changed_empty_spn"); err != nil {
+	if err := w.RefreshIdentityLive(context.Background(), "test_identity_changed_empty_spn"); err != nil {
 		t.Fatalf("RefreshIdentityLive() error=%v", err)
 	}
 
@@ -273,7 +273,7 @@ func TestRefreshIdentityLiveKeepsNativeSPNWhenIdentityUnchangedAndSPNEmpty(t *te
 	w.state.Identity.ICCID = "8986000000000000001"
 	w.state.Identity.NativeSPN = "中国移动"
 
-	if err := w.RefreshIdentityLive(nil, "test_identity_unchanged_empty_spn"); err != nil {
+	if err := w.RefreshIdentityLive(context.Background(), "test_identity_unchanged_empty_spn"); err != nil {
 		t.Fatalf("RefreshIdentityLive() error=%v", err)
 	}
 

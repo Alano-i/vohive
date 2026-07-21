@@ -1441,9 +1441,7 @@ func TestNotifyModemResetDelayedSkipsReloadDuringSwitchSuppressionWindow(t *test
 	mgr.suppressOverviewReloadUntil = time.Now().Add(2 * time.Second)
 
 	mgr.NotifyModemResetDelayed(80 * time.Millisecond)
-	select {
-	case <-time.After(200 * time.Millisecond):
-	}
+	time.Sleep(200 * time.Millisecond)
 
 	if calls.Load() != 0 {
 		t.Fatalf("overview reload calls = %d, want 0 during switch suppression window", calls.Load())
@@ -1574,9 +1572,7 @@ func TestInvalidateOverviewCacheDiscardsOlderReloadResult(t *testing.T) {
 	mgr.invalidateOverviewCache("reset")
 	close(firstRelease)
 
-	select {
-	case <-time.After(200 * time.Millisecond):
-	}
+	time.Sleep(200 * time.Millisecond)
 
 	if got := mgr.cachedOverview(); got != nil {
 		t.Fatalf("cachedOverview() = %#v, want nil after invalidation racing old reload", got)
@@ -1930,9 +1926,7 @@ func TestNotifyUIMIndicationSkipsReloadDuringSwitchSuppressionWindow(t *testing.
 	mgr.suppressOverviewReloadUntil = time.Now().Add(2 * time.Second)
 
 	mgr.NotifyUIMIndication("slot_status")
-	select {
-	case <-time.After(200 * time.Millisecond):
-	}
+	time.Sleep(200 * time.Millisecond)
 
 	if calls.Load() != 0 {
 		t.Fatalf("overview reload calls = %d, want 0 during switch suppression window", calls.Load())
@@ -1954,9 +1948,7 @@ func TestNotifyModemResetSkipsReloadDuringSwitchSuppressionWindow(t *testing.T) 
 	mgr.suppressOverviewReloadUntil = time.Now().Add(2 * time.Second)
 
 	mgr.NotifyModemReset()
-	select {
-	case <-time.After(200 * time.Millisecond):
-	}
+	time.Sleep(200 * time.Millisecond)
 
 	if calls.Load() != 0 {
 		t.Fatalf("overview reload calls = %d, want 0 during switch suppression window", calls.Load())

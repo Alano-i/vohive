@@ -49,12 +49,20 @@ func NewTransportRecoveryController(pool *Pool) *TransportRecoveryController {
 }
 
 func (c *TransportRecoveryController) Observe(event TransportRecoveryEvent) bool {
+	accepted, _ := c.ObserveWithBudget(event)
+	return accepted
+}
+
+// ObserveWithBudget atomically deduplicates a recovery and consumes one rebuild
+// slot only when the event is actually accepted. This avoids duplicate QMI
+// callbacks exhausting the budget without performing a rebuild.
+func (c *TransportRecoveryController) ObserveWithBudget(event TransportRecoveryEvent) (accepted bool, overLimit bool) {
 	if c == nil {
-		return false
+		return false, false
 	}
 	event.DeviceID = strings.TrimSpace(event.DeviceID)
 	if event.DeviceID == "" || !event.startsRecovery() {
-		return false
+		return false, false
 	}
 	if event.At.IsZero() {
 		event.At = time.Now()
@@ -62,13 +70,25 @@ func (c *TransportRecoveryController) Observe(event TransportRecoveryEvent) bool
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if currentGeneration := c.workerGenerations[event.DeviceID]; currentGeneration != 0 && event.WorkerGeneration != 0 && event.WorkerGeneration != currentGeneration {
-		return false
+		return false, false
 	}
 	if _, exists := c.active[event.DeviceID]; exists {
-		return false
+		return false, false
 	}
+	cutoff := event.At.Add(-rebuildWindow)
+	kept := c.rebuildTimes[event.DeviceID][:0]
+	for _, ts := range c.rebuildTimes[event.DeviceID] {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	if len(kept) >= rebuildMaxInWindow {
+		c.rebuildTimes[event.DeviceID] = kept
+		return false, true
+	}
+	c.rebuildTimes[event.DeviceID] = append(kept, event.At)
 	c.active[event.DeviceID] = event
-	return true
+	return true, false
 }
 
 func (c *TransportRecoveryController) Finish(deviceID string) {
@@ -93,43 +113,12 @@ func (c *TransportRecoveryController) SetWorkerGeneration(deviceID string, gener
 		return
 	}
 	c.mu.Lock()
-	if c.workerGenerations[deviceID] != generation {
-		delete(c.rebuildTimes, deviceID)
-	}
 	c.workerGenerations[deviceID] = generation
 	c.mu.Unlock()
 }
 
 func (c *TransportRecoveryController) SetWorkerGenerationForTest(deviceID string, generation uint64) {
 	c.SetWorkerGeneration(deviceID, generation)
-}
-
-// AllowRebuild reports whether a worker rebuild for deviceID is permitted under
-// the sliding-window cap, recording the attempt when allowed.
-func (c *TransportRecoveryController) AllowRebuild(deviceID string) bool {
-	return c.allowRebuildAt(strings.TrimSpace(deviceID), time.Now())
-}
-
-func (c *TransportRecoveryController) allowRebuildAt(deviceID string, now time.Time) bool {
-	if c == nil || deviceID == "" {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cutoff := now.Add(-rebuildWindow)
-	kept := c.rebuildTimes[deviceID][:0]
-	for _, ts := range c.rebuildTimes[deviceID] {
-		if ts.After(cutoff) {
-			kept = append(kept, ts)
-		}
-	}
-	if len(kept) >= rebuildMaxInWindow {
-		c.rebuildTimes[deviceID] = kept
-		return false
-	}
-	kept = append(kept, now)
-	c.rebuildTimes[deviceID] = kept
-	return true
 }
 
 func (event TransportRecoveryEvent) startsRecovery() bool {

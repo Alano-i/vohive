@@ -61,6 +61,15 @@ func TestRunQMIStartCoreRetryAttemptIsBounded(t *testing.T) {
 	}
 }
 
+func TestQMIStartRetryEscalatesAfterBoundedFailures(t *testing.T) {
+	if qmiStartRetryShouldReset(qmiCoreRetryFailuresBeforeReset - 1) {
+		t.Fatal("retry escalated before failure threshold")
+	}
+	if !qmiStartRetryShouldReset(qmiCoreRetryFailuresBeforeReset) {
+		t.Fatal("retry did not escalate at failure threshold")
+	}
+}
+
 func TestQMIStartContextCancelsWhenWorkerStops(t *testing.T) {
 	workerStop := make(chan struct{})
 	ctx, cancel := qmiStartContext(context.Background(), workerStop)

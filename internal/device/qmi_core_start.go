@@ -11,6 +11,7 @@ import (
 
 const qmiCoreStartupInlineBudget = 60 * time.Second
 const qmiCoreRetryAttemptBudget = 60 * time.Second
+const qmiCoreRetryFailuresBeforeReset = 2
 
 type qmiCoreStartResult struct {
 	err   error
@@ -53,6 +54,10 @@ func runQMIStartCoreRetryAttempt(parent context.Context, startCore func(context.
 	return startCore(ctx)
 }
 
+func qmiStartRetryShouldReset(failures int) bool {
+	return failures >= qmiCoreRetryFailuresBeforeReset
+}
+
 func (p *Pool) startQMICoreWithStartupBudget(worker *Worker, reason string) error {
 	if worker == nil || worker.QMICore == nil {
 		return nil
@@ -88,8 +93,13 @@ func (p *Pool) startQMICoreRetryLoop(worker *Worker) {
 	if worker == nil || worker.QMICore == nil {
 		return
 	}
+	if !worker.qmiStartRetrying.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
+		defer worker.qmiStartRetrying.Store(false)
 		delay := 2 * time.Second
+		failures := 0
 		for {
 			select {
 			case <-p.ctx.Done():
@@ -98,14 +108,23 @@ func (p *Pool) startQMICoreRetryLoop(worker *Worker) {
 				return
 			case <-time.After(delay):
 			}
+			if !p.isCurrentWorker(worker) {
+				return
+			}
 
 			attemptCtx, cancel := qmiStartContext(p.ctx, worker.stop)
 			err := runQMIStartCoreRetryAttempt(attemptCtx, worker.QMICore.StartCoreContext, qmiCoreRetryAttemptBudget)
 			cancel()
 			if err == nil {
+				worker.qmiStartRetrying.Store(false)
+				if !p.isCurrentWorker(worker) {
+					return
+				}
 				logger.Info(fmt.Sprintf("[%s] QMI Core 已恢复启动", worker.ID))
 				cleanupWorkerStartupSIMAuthLogicalChannels(worker)
-				if _, resetErr := p.resetExistingQMIDataConnectionBeforePreference(worker, "qmi_core_recovered"); resetErr != nil {
+				if p.IsESIMSwitching(worker.ID) || worker.SIMIdentitySuppressesOverviewIMSI() {
+					logger.Info(fmt.Sprintf("[%s] QMI Core 已恢复，SIM 身份仍在切换，数据清理与网络偏好交由切卡事务处理", worker.ID))
+				} else if _, resetErr := p.resetExistingQMIDataConnectionBeforePreference(worker, "qmi_core_recovered"); resetErr != nil {
 					logger.Warn(fmt.Sprintf("[%s] QMI Core 恢复后清理既有数据连接失败，跳过自动应用网络偏好", worker.ID), "err", resetErr)
 				} else {
 					if applyErr := p.applyNetworkPreference(worker); applyErr != nil {
@@ -116,6 +135,20 @@ func (p *Pool) startQMICoreRetryLoop(worker *Worker) {
 				return
 			} else {
 				if errors.Is(err, context.Canceled) {
+					return
+				}
+				failures++
+				if qmiStartRetryShouldReset(failures) {
+					logger.Warn(fmt.Sprintf("[%s] QMI Core 连续启动超时，升级为模组复位恢复", worker.ID),
+						"err", err,
+						"failures", failures)
+					p.scheduleNetworkControlRecoveryWithEvent(worker, "qmi_startup_timeout", &TransportRecoveryEvent{
+						DeviceID:         worker.ID,
+						WorkerGeneration: worker.generation,
+						Kind:             TransportRecoveryEventRecoveryExhausted,
+						Source:           "qmi_startup_timeout",
+						Err:              err,
+					})
 					return
 				}
 				if delay < 60*time.Second {

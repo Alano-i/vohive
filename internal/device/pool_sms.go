@@ -394,7 +394,7 @@ func (w *Worker) GetIMSI() string {
 }
 
 func (w *Worker) GetDeviceStatus() modem.DeviceStatus {
-	_ = w.RefreshRuntime(nil, "get_device_status")
+	_ = w.RefreshRuntime(context.Background(), "get_device_status")
 	return w.ProjectDeviceStatus()
 }
 
