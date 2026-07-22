@@ -176,6 +176,9 @@ func TestManagerOpenSIMAuthLogicalChannelBlockedBySwitchBarrier(t *testing.T) {
 	if req.cmd != `AT+CCHO="A0000000871002"` {
 		t.Fatalf("command = %q, want USIM CCHO", req.cmd)
 	}
+	if req.silent {
+		t.Fatal("SIM authentication CCHO must keep normal AT error logging")
+	}
 	req.respChan <- "+CCHO: 2\r\nOK"
 
 	if err := <-done; err != nil {
@@ -210,6 +213,9 @@ func TestManagerOpenEUICCLogicalChannelAllowedBySwitchBarrier(t *testing.T) {
 	req := <-m.cmdChan
 	if req.cmd != `AT+CCHO="A0000005591010FFFFFFFF8900000100"` {
 		t.Fatalf("command = %q, want eUICC CCHO", req.cmd)
+	}
+	if !req.silent {
+		t.Fatal("eUICC candidate probing must use silent AT execution")
 	}
 	req.respChan <- "+CCHO: 3\r\nOK"
 

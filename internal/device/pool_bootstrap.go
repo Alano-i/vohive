@@ -567,6 +567,7 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 			p.scheduleATDisconnectRecovery(devID, reason)
 		})
 		p.bindModemReadyIndications(w)
+		p.bindModemSIMStatusIndications(w, m)
 	}
 
 	if backendMode == backend.BackendQMI {
@@ -723,8 +724,9 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 			attempt++
 			_, err := p.refreshIdentityAndApplyCardPolicy(worker, "startup_post_apply")
 			if err == nil && worker.CurrentICCID() != "" {
-				p.prewarmActiveESIMProfileName(worker, "startup_post_apply")
-				return
+				if p.discoverAndPrewarmESIMCapability(worker, "startup_post_apply") != esimCapabilityUnknown {
+					return
+				}
 			}
 			logger.Debug(fmt.Sprintf("[%s] 启动期卡策略应用尚未完成，稍后重试", worker.ID),
 				"attempt", attempt, "err", err)

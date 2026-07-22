@@ -540,6 +540,7 @@ func TestPoolConfirmSIMRemovedStopsVoWiFi(t *testing.T) {
 	backend := &workerStatusBackendStub{simInserted: false}
 	w := &Worker{ID: "dev-1", Backend: backend}
 	p.workers["dev-1"] = w
+	p.setESIMCapability(w, esimCapabilitySupported, "test_setup")
 	p.voWiFiRuntimeStore().SetInstance("dev-1", &runtimehost.Instance{})
 	if !p.voWiFiHost().BeginDesiredRecover("dev-1", time.Now().Add(-time.Minute)) {
 		t.Fatal("expected desired recover state setup to begin")
@@ -561,6 +562,9 @@ func TestPoolConfirmSIMRemovedStopsVoWiFi(t *testing.T) {
 	}
 	if p.voWiFiHost().HasDesiredRecoverState("dev-1") {
 		t.Fatal("SIM 拔出后应清除 VoWiFi 目标态恢复状态")
+	}
+	if w.ESIMEnabled() {
+		t.Fatal("SIM 拔出后应清除当前卡的 eSIM 能力")
 	}
 }
 

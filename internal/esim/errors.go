@@ -2,6 +2,10 @@ package esim
 
 import "errors"
 
+// ErrNoEUICC means every candidate eUICC AID was conclusively rejected by the
+// current SIM. Transport failures and timeouts must not be wrapped with it.
+var ErrNoEUICC = errors.New("no eUICC detected")
+
 // DeleteProfileErrorCode 表示 DeleteProfile 场景的可判别错误类别。
 type DeleteProfileErrorCode string
 

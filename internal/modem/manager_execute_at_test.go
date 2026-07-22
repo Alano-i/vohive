@@ -380,8 +380,8 @@ func TestHandleCommandResetsTimeoutWatchdogOnDeviceError(t *testing.T) {
 		m.rxChan <- rxMsg{Data: "ERROR"}
 	}()
 	m.handleCommand(req)
-	if err := <-req.errChan; err == nil || !strings.Contains(err.Error(), "设备返回错误") {
-		t.Fatalf("device error=%v want 设备返回错误", err)
+	if err := <-req.errChan; err == nil || !errors.Is(err, ErrATCommandRejected) {
+		t.Fatalf("device error=%v want ErrATCommandRejected", err)
 	}
 
 	for i := 0; i < atTimeoutWatchdogThreshold-1; i++ {

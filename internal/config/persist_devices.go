@@ -52,11 +52,9 @@ func UpdateDeviceInFile(path string, deviceID string, newDevice DeviceConfig) er
 		} else {
 			deleteMapKey(n, "qmi_proxy_executable")
 		}
-		if newDevice.ESIMEnabled {
-			setMapBool(n, "esim_enabled", true)
-		} else {
-			deleteMapKey(n, "esim_enabled")
-		}
+		// eSIM capability belongs to the currently inserted card and is detected at
+		// runtime. Remove the legacy device-level flag whenever this entry is saved.
+		deleteMapKey(n, "esim_enabled")
 
 		if newDevice.ProxyPort > 0 {
 			setMapInt(n, "proxy_port", newDevice.ProxyPort)
@@ -185,9 +183,6 @@ func deviceConfigToNode(d DeviceConfig) *yaml.Node {
 	}
 	if d.QMIProxyExecutable != "" {
 		appendMapScalar(m, "qmi_proxy_executable", d.QMIProxyExecutable)
-	}
-	if d.ESIMEnabled {
-		appendMapBool(m, "esim_enabled", true)
 	}
 	if d.ProxyPort > 0 {
 		appendMapInt(m, "proxy_port", d.ProxyPort)

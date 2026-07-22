@@ -39,7 +39,6 @@ type deviceConfigDTO struct {
 	QMIProxyPath          *string `json:"qmi_proxy_path,omitempty"`
 	QMIProxyExecutable    *string `json:"qmi_proxy_executable,omitempty"`
 	ESIMTransport         string  `json:"esim_transport,omitempty"`
-	ESIMEnabled           bool    `json:"esim_enabled"`
 	BaudRate              int     `json:"baud_rate,omitempty"`
 	DataBits              int     `json:"data_bits,omitempty"`
 	StopBits              int     `json:"stop_bits,omitempty"`
@@ -69,7 +68,6 @@ func deviceConfigToDTO(c config.DeviceConfig) deviceConfigDTO {
 		QMIProxyPath:          stringPtr(c.QMIProxyPath),
 		QMIProxyExecutable:    stringPtr(c.QMIProxyExecutable),
 		ESIMTransport:         config.NormalizeESIMTransport(c.ESIMTransport),
-		ESIMEnabled:           c.ESIMEnabled,
 		BaudRate:              c.BaudRate,
 		DataBits:              c.DataBits,
 		StopBits:              c.StopBits,
@@ -98,12 +96,10 @@ func deviceConfigFromDTOWithBase(d deviceConfigDTO, base *config.DeviceConfig) c
 	qmiUseProxy := false
 	qmiProxyPath := ""
 	qmiProxyExecutable := ""
-	esimEnabled := d.ESIMEnabled
 	if base != nil {
 		qmiUseProxy = base.QMIUseProxy
 		qmiProxyPath = base.QMIProxyPath
 		qmiProxyExecutable = base.QMIProxyExecutable
-		esimEnabled = esimEnabled || base.ESIMEnabled
 	}
 	if d.QMIUseProxy != nil {
 		qmiUseProxy = *d.QMIUseProxy
@@ -127,7 +123,6 @@ func deviceConfigFromDTOWithBase(d deviceConfigDTO, base *config.DeviceConfig) c
 		QMIProxyPath:          qmiProxyPath,
 		QMIProxyExecutable:    qmiProxyExecutable,
 		ESIMTransport:         config.NormalizeESIMTransport(d.ESIMTransport),
-		ESIMEnabled:           esimEnabled,
 		BaudRate:              d.BaudRate,
 		DataBits:              d.DataBits,
 		StopBits:              d.StopBits,
@@ -463,7 +458,7 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 		Interface:              cfg.Interface,
 		ControlDevice:          cfg.ControlDevice,
 		ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
-		ESIMEnabled:            cfg.ESIMEnabled,
+		ESIMEnabled:            w.ESIMEnabled(),
 		SIMIdentityPhase:       w.SIMIdentityPhase(),
 		ATPort:                 w.ResolvedATPort(),
 		USBPath:                cfg.USBPath,
@@ -499,7 +494,7 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 }
 
 func activeESIMProfileName(w *device.Worker) string {
-	if w == nil || w.EsimMgr == nil {
+	if w == nil || !w.ESIMEnabled() || w.EsimMgr == nil {
 		return ""
 	}
 	name, err := w.EsimMgr.ActiveProfileName()
@@ -610,7 +605,7 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			ATPort:                 w.ResolvedATPort(),
 			DeviceBackend:          cfg.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(cfg.ESIMTransport),
-			ESIMEnabled:            cfg.ESIMEnabled,
+			ESIMEnabled:            w.ESIMEnabled(),
 			SIMIdentityPhase:       w.SIMIdentityPhase(),
 			ActiveESIMProfileName:  activeESIMProfileName(w),
 			SMSEnabled:             cfg.SMSEnabled,
@@ -659,7 +654,6 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 			ATPort:                 dc.ATPort,
 			DeviceBackend:          dc.DeviceBackend,
 			ESIMTransport:          config.NormalizeESIMTransport(dc.ESIMTransport),
-			ESIMEnabled:            dc.ESIMEnabled,
 			SMSEnabled:             true, // SMS 恒开（系统不变量）
 			NetworkEnabled:         dc.NetworkEnabled,
 			AirplaneEnabled:        dc.AirplaneEnabled,
@@ -762,7 +756,6 @@ func (s *Server) handleDeviceMgmtOverviewLite(c *gin.Context) {
 				Interface:              dc.Interface,
 				ControlDevice:          dc.ControlDevice,
 				ESIMTransport:          config.NormalizeESIMTransport(dc.ESIMTransport),
-				ESIMEnabled:            dc.ESIMEnabled,
 				ATPort:                 dc.ATPort,
 				USBPath:                dc.USBPath,
 				SMSEnabled:             pol.SMSEnabled,
@@ -827,7 +820,6 @@ func (s *Server) handleDeviceMgmtOverviewLite(c *gin.Context) {
 			Interface:              dc.Interface,
 			ControlDevice:          dc.ControlDevice,
 			ESIMTransport:          config.NormalizeESIMTransport(dc.ESIMTransport),
-			ESIMEnabled:            dc.ESIMEnabled,
 			ATPort:                 dc.ATPort,
 			SMSEnabled:             true, // SMS 恒开（系统不变量）
 			NetworkEnabled:         dc.NetworkEnabled,
@@ -1598,23 +1590,6 @@ func (s *Server) esimWorkerForRequest(c *gin.Context, id, reason string) (*devic
 	return worker, true
 }
 
-func (s *Server) rememberESIMCapability(deviceID string) {
-	cfg, err := config.GetDeviceByID(deviceID)
-	if err != nil || cfg == nil || cfg.ESIMEnabled {
-		return
-	}
-	next := *cfg
-	next.ESIMEnabled = true
-	if err := config.UpdateDeviceInFile(s.configPath, deviceID, next); err != nil {
-		logger.Warn("持久化 eSIM 能力标记失败", "device", deviceID, "err", err)
-		return
-	}
-	if s.pool != nil {
-		s.pool.MarkESIMEnabled(deviceID)
-	}
-	logger.Info("设备 eSIM 能力已确认并持久化", "device", deviceID)
-}
-
 // handleEsimListProfiles 获取 eSIM Profile 列表
 func (s *Server) handleEsimListProfiles(c *gin.Context) {
 	id := deviceIDParam(c)
@@ -1645,7 +1620,7 @@ func (s *Server) handleEsimListProfiles(c *gin.Context) {
 		return
 	}
 	if len(profiles) > 0 {
-		s.rememberESIMCapability(id)
+		s.pool.MarkESIMSupported(id, "api_list_profiles")
 	}
 	c.JSON(http.StatusOK, profiles)
 }
@@ -1910,6 +1885,9 @@ func (s *Server) handleEsimGetEID(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if len(eids) > 0 {
+		s.pool.MarkESIMSupported(id, "api_get_eids")
+	}
 	c.JSON(http.StatusOK, gin.H{"eids": eids})
 }
 
@@ -1931,7 +1909,7 @@ func (s *Server) handleEsimGetChipInfo(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	s.rememberESIMCapability(id)
+	s.pool.MarkESIMSupported(id, "api_get_chip_info")
 	c.JSON(http.StatusOK, chipInfo)
 }
 
@@ -1964,7 +1942,7 @@ func (s *Server) handleEsimGetOverview(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	s.rememberESIMCapability(id)
+	s.pool.MarkESIMSupported(id, "api_get_overview")
 
 	c.JSON(http.StatusOK, overview)
 }
@@ -2581,7 +2559,6 @@ func (s *Server) handleDeviceMgmtOverviewStreamSingle(c *gin.Context) {
 				Interface:              md.Interface,
 				ControlDevice:          md.ControlDevice,
 				ESIMTransport:          config.NormalizeESIMTransport(md.ESIMTransport),
-				ESIMEnabled:            md.ESIMEnabled,
 				ATPort:                 md.ATPort,
 				AudioDevice:            md.AudioDevice,
 				SMSEnabled:             pol.SMSEnabled,

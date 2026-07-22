@@ -22,6 +22,7 @@ import (
 	sgp22 "github.com/damonto/euicc-go/v2"
 	qmiq "github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	"github.com/iniwex5/vohive/internal/backend"
+	"github.com/iniwex5/vohive/internal/modem"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -3226,6 +3227,44 @@ func TestDoForEachEUICCReattemptsAfterPartialFailure(t *testing.T) {
 	}
 	if attempts[strings.ToUpper(hex.EncodeToString(aid1))] == 0 {
 		t.Fatal("second scan did not re-attempt aid1")
+	}
+}
+
+func TestDoForEachEUICCClassifiesConclusiveAIDRejection(t *testing.T) {
+	mgr := newManagerWithChannelFactory("physical-sim", func([]byte) (*lpa.Client, error) {
+		return nil, fmt.Errorf("open channel: %w", modem.ErrATCommandRejected)
+	}, nil, nil, nil)
+
+	found, err := mgr.doForEachEUICC(AIDs[:2], func(*lpa.Client, []byte, string) error { return nil })
+	if found {
+		t.Fatal("physical SIM scan unexpectedly found an eUICC")
+	}
+	if !errors.Is(err, ErrNoEUICC) {
+		t.Fatalf("error=%v want ErrNoEUICC", err)
+	}
+}
+
+func TestDoForEachEUICCDoesNotMisclassifyTransportFailure(t *testing.T) {
+	mgr := newManagerWithChannelFactory("unavailable-transport", func([]byte) (*lpa.Client, error) {
+		return nil, errors.New("transport timeout")
+	}, nil, nil, nil)
+
+	_, err := mgr.doForEachEUICC(AIDs[:2], func(*lpa.Client, []byte, string) error { return nil })
+	if errors.Is(err, ErrNoEUICC) {
+		t.Fatalf("transient transport error was misclassified as no eUICC: %v", err)
+	}
+}
+
+func TestInvalidateSIMCacheDropsPreviousCardData(t *testing.T) {
+	mgr := newManagerWithChannelFactory("dev-esim", nil, nil, nil, nil)
+	mgr.overviewCache = &EsimOverview{Profiles: []EUICCProfiles{{EID: "old-eid"}}}
+	mgr.chipInfoCache = &EUICCChipInfo{EIDs: []EUICCInfo{{EID: "old-eid"}}}
+	mgr.discoveredEUICCs = []EUICCInfo{{EID: "old-eid"}}
+
+	mgr.InvalidateSIMCache()
+
+	if mgr.cachedOverview() != nil || mgr.chipInfoCache != nil || len(mgr.discoveredEUICCs) != 0 {
+		t.Fatal("previous SIM cache was not fully invalidated")
 	}
 }
 

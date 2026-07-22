@@ -110,6 +110,9 @@ type Worker struct {
 	stop             chan struct{}
 	stopOnce         sync.Once
 	atRuntimeMu      sync.Mutex
+	esimProbeMu      sync.Mutex
+	esimCapability   atomic.Uint32
+	esimGeneration   atomic.Uint64
 	runtimeRefreshMu sync.Mutex
 	runtimeRefreshBG atomic.Bool
 	qmiStartRetrying atomic.Bool
@@ -703,7 +706,7 @@ func (p *Pool) bindQMIStateIndications(worker *Worker) {
 			return
 		}
 		logger.Info("[事件驱动] SIM 状态变化", "device", worker.ID)
-		p.handleSIMStatusEvent(worker.ID, "qmi_sim_status", nil, "")
+		p.handleSIMStatusEvent(worker.ID, "qmi_sim_status")
 		p.wakeDesiredVoWiFiRecoverFromDeviceEvent(worker.ID, "post_switch_qmi_sim_status")
 		if p.IsESIMSwitching(worker.ID) || worker.SIMIdentitySuppressesOverviewIMSI() {
 			return
@@ -729,7 +732,7 @@ func (p *Pool) bindMBIMStateIndications(worker *Worker) {
 			return
 		}
 		logger.Info("[事件驱动] MBIM SIM 状态变化", "device", worker.ID)
-		p.handleSIMStatusEvent(worker.ID, "mbim_sim_status", nil, "")
+		p.handleSIMStatusEvent(worker.ID, "mbim_sim_status")
 		p.wakeDesiredVoWiFiRecoverFromDeviceEvent(worker.ID, "post_switch_mbim_sim_status")
 	})
 }
@@ -839,15 +842,9 @@ func (p *Pool) bindQMIHealthIndications(worker *Worker) {
 	})
 }
 
-func (p *Pool) handleSIMStatusEvent(deviceID, source string, insertedHint *bool, state string) {
+func (p *Pool) handleSIMStatusEvent(deviceID, source string) {
 	deviceID = strings.TrimSpace(deviceID)
 	if p == nil || deviceID == "" {
-		return
-	}
-	if insertedHint != nil && *insertedHint {
-		return
-	}
-	if strings.EqualFold(strings.TrimSpace(state), "READY") {
 		return
 	}
 
@@ -862,6 +859,18 @@ func (p *Pool) handleSIMStatusEvent(deviceID, source string, insertedHint *bool,
 		p.confirmSIMRemovedAndStopVoWiFi(deviceID, source)
 	})
 	p.simEventMu.Unlock()
+}
+
+func (p *Pool) bindModemSIMStatusIndications(worker *Worker, manager *modem.Manager) {
+	if p == nil || worker == nil || manager == nil {
+		return
+	}
+	manager.SetSIMStatusHandler(func(_ *bool, _ string) {
+		if !p.isCurrentWorker(worker) {
+			return
+		}
+		p.handleSIMStatusEvent(worker.ID, "at_sim_status")
+	})
 }
 
 var deviceEventRecoverWakeDelay = 500 * time.Millisecond
@@ -973,11 +982,22 @@ func (p *Pool) confirmSIMRemovedAndStopVoWiFi(deviceID, source string) {
 		return
 	}
 	if inserted {
-		_ = w.RefreshRuntime(ctx, "sim_status_inserted")
+		previousICCID := normalizeSIMIdentityForCompare(w.CurrentICCID())
+		result, refreshErr := p.refreshIdentityAndApplyCardPolicy(w, "sim_status_inserted")
+		if refreshErr != nil {
+			logger.Debug("SIM 插入后身份刷新尚未完成", "device", deviceID, "source", source, "err", refreshErr)
+			return
+		}
+		currentICCID := normalizeSIMIdentityForCompare(result.ICCID)
+		if currentICCID != "" && previousICCID != currentICCID {
+			p.resetESIMCapability(w, "sim_identity_changed")
+		}
+		p.discoverAndPrewarmESIMCapability(w, "sim_status_inserted")
 		return
 	}
 
 	_ = w.RefreshRuntime(ctx, "sim_removed")
+	p.resetESIMCapability(w, "sim_removed")
 	p.clearDesiredVoWiFiRecoverState(deviceID)
 	if !p.IsVoWiFiActive(deviceID) {
 		return
@@ -1262,7 +1282,7 @@ func (p *Pool) refreshIdentityAndApplyCardPolicy(worker *Worker, reason string) 
 // prewarmActiveESIMProfileName fills the lightweight profile cache used by
 // device titles, so opening the eSIM tab is not required to discover the name.
 func (p *Pool) prewarmActiveESIMProfileName(worker *Worker, reason string) {
-	if p == nil || worker == nil || worker.EsimMgr == nil || !worker.ConfigSnapshot().ESIMEnabled {
+	if p == nil || worker == nil || worker.EsimMgr == nil || !worker.ESIMEnabled() {
 		return
 	}
 	if err := p.EnsureESIMRuntime(worker.ID, "profile_name_prewarm"); err != nil {
@@ -2053,17 +2073,6 @@ func (p *Pool) UpdateWorkerConfig(id string, cfg config.DeviceConfig, applyAll b
 	p.mu.Unlock()
 
 	p.resolveAndApplyPolicy(w, "config_update")
-	return true
-}
-
-func (p *Pool) MarkESIMEnabled(id string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	w := p.workers[id]
-	if w == nil {
-		return false
-	}
-	w.updateConfig(func(cfg *config.DeviceConfig) { cfg.ESIMEnabled = true })
 	return true
 }
 

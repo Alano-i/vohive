@@ -102,6 +102,7 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 		logger.Warn(fmt.Sprintf("[%s] 检测到模块掉线，将进入重启恢复扫描", devID), "reason", disconnectReason)
 		p.scheduleATDisconnectRecovery(devID, disconnectReason)
 	})
+	p.bindModemSIMStatusIndications(worker, nextModem)
 	if err := nextModem.Start(); err != nil {
 		nextModem.Stop()
 		return fmt.Errorf("启动 AT 管理器失败: %w", err)

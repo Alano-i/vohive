@@ -251,12 +251,14 @@ func (m *Manager) SetUSBNetMode(mode int) error {
 
 // OpenLogicalChannel 通过 AT+CCHO 打开 eUICC 的 logical channel
 func (m *Manager) OpenLogicalChannel(aid string) (int, error) {
-	return m.openLogicalChannel(aid, "esim_session_open", "esim", apduarbiter.APDUClassEUICCWrite)
+	// eUICC discovery intentionally tries multiple vendor AIDs. Unsupported AIDs
+	// are expected and must not emit one warning per candidate.
+	return m.openLogicalChannel(aid, "esim_session_open", "esim", apduarbiter.APDUClassEUICCWrite, true)
 }
 
 // OpenSIMAuthLogicalChannel 通过 AT+CCHO 打开 USIM/ISIM 鉴权 logical channel。
 func (m *Manager) OpenSIMAuthLogicalChannel(aid string) (int, error) {
-	return m.openLogicalChannel(aid, "vowifi_aka_open", "vowifi_aka", apduarbiter.APDUClassUSIMAKA)
+	return m.openLogicalChannel(aid, "vowifi_aka_open", "vowifi_aka", apduarbiter.APDUClassUSIMAKA, false)
 }
 
 func (m *Manager) ResolveSIMAuthAID(app string, fallbackAID string) (string, string, error) {
@@ -292,7 +294,7 @@ func (m *Manager) ResolveSIMAuthAID(app string, fallbackAID string) (string, str
 	return "", "sim_auth_aid_not_ready", fmt.Errorf("sim_auth_aid_not_ready: no %s full AID in EF_DIR", app)
 }
 
-func (m *Manager) openLogicalChannel(aid, leaseOwner, sessionOwner string, class apduarbiter.APDUClass) (int, error) {
+func (m *Manager) openLogicalChannel(aid, leaseOwner, sessionOwner string, class apduarbiter.APDUClass, silent bool) (int, error) {
 	lease, err := m.acquireAPDUTransportLease(5*time.Second, leaseOwner, class, -1)
 	if err != nil {
 		return -1, err
@@ -302,7 +304,12 @@ func (m *Manager) openLogicalChannel(aid, leaseOwner, sessionOwner string, class
 		lease.Touch()
 	}
 	cmd := fmt.Sprintf("AT+CCHO=\"%s\"", aid)
-	resp, err := m.ExecuteAT(cmd, 5*time.Second)
+	var resp string
+	if silent {
+		resp, err = m.ExecuteATSilent(cmd, 5*time.Second)
+	} else {
+		resp, err = m.ExecuteAT(cmd, 5*time.Second)
+	}
 	if err != nil {
 		return -1, fmt.Errorf("打开 logical channel 失败: %w", err)
 	}

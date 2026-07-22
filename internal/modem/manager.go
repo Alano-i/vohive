@@ -25,6 +25,8 @@ import (
 	"go.bug.st/serial"
 )
 
+var ErrATCommandRejected = errors.New("设备返回错误")
+
 // SMSCallback 短信回调函数类型
 type SMSCallback func(sender, content string, timestamp time.Time)
 
@@ -685,7 +687,7 @@ RespLoop:
 						"resp", strings.Join(fullResponse, " | "),
 						"cost", time.Since(startTime).Truncate(time.Millisecond).String())
 				}
-				req.errChan <- fmt.Errorf("设备返回错误: %s", strings.Join(fullResponse, "\n"))
+				req.errChan <- fmt.Errorf("%w: %s", ErrATCommandRejected, strings.Join(fullResponse, "\n"))
 				break RespLoop
 			} else if strings.Contains(line, ">") {
 				m.resetATTimeoutWatchdog()

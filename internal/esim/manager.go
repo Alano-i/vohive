@@ -873,7 +873,10 @@ func (m *Manager) forEachEUICC(fn func(client *lpa.Client, aid []byte, eidStr st
 		return err
 	}
 
-	logger.Warn("AID 扫描未发现 eUICC",
+	// A physical SIM is a valid result when capability is not known yet. The
+	// caller still receives the detailed error; keep candidate probing out of
+	// warning logs so a normal physical SIM does not look unhealthy.
+	logger.Debug("AID 扫描未发现 eUICC",
 		"device", m.deviceID,
 		"policy", plan.Policy,
 		"triedCount", len(aids),
@@ -1062,6 +1065,8 @@ func (m *Manager) doForEachEUICC(aids [][]byte, fn func(client *lpa.Client, aid 
 	var successAIDs [][]byte
 	foundAny := false
 	var lastErr error
+	attemptedAIDs := 0
+	rejectedAIDs := 0
 
 	for _, aid := range aids {
 		if !shouldContinueAIDScanAfterSuccess(successAIDs, aid) {
@@ -1072,6 +1077,7 @@ func (m *Manager) doForEachEUICC(aids [][]byte, fn func(client *lpa.Client, aid 
 			break
 		}
 
+		attemptedAIDs++
 		err := func() error {
 			aidHex := fmt.Sprintf("%X", aid)
 			client, err := m.createLPAWithAID(aid)
@@ -1120,10 +1126,16 @@ func (m *Manager) doForEachEUICC(aids [][]byte, fn func(client *lpa.Client, aid 
 
 		if err != nil {
 			lastErr = err
+			if errors.Is(err, modem.ErrATCommandRejected) {
+				rejectedAIDs++
+			}
 		}
 	}
 
 	if !foundAny {
+		if attemptedAIDs > 0 && rejectedAIDs == attemptedAIDs {
+			return false, ErrNoEUICC
+		}
 		return false, lastErr
 	}
 
@@ -1425,6 +1437,17 @@ func (m *Manager) clearHardwareDiscoveryCachesLocked() {
 	m.overviewLastErr = nil
 	m.chipInfoCache = nil
 	m.discoveredEUICCs = nil
+}
+
+// InvalidateSIMCache drops data owned by the previously inserted card without
+// starting an APDU reload while the slot is empty or changing cards.
+func (m *Manager) InvalidateSIMCache() {
+	if m == nil {
+		return
+	}
+	m.cacheMu.Lock()
+	m.clearHardwareDiscoveryCachesLocked()
+	m.cacheMu.Unlock()
 }
 
 func (m *Manager) shouldSuppressOverviewReload() bool {

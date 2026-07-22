@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ import (
 // 当前实现会写 control_device/interface/at_port → 本测试现在应 FAIL,证明保存侧泄漏。
 func TestUpdateDeviceInFileDoesNotPersistRuntimePaths(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	raw := "devices:\n- id: dev1\n  device_backend: qmi\n  modem_imei: \"867383058993207\"\n  vowifi_enabled: true\n"
+	raw := "devices:\n- id: dev1\n  device_backend: qmi\n  modem_imei: \"867383058993207\"\n  esim_enabled: true\n  vowifi_enabled: true\n"
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -20,7 +21,6 @@ func TestUpdateDeviceInFileDoesNotPersistRuntimePaths(t *testing.T) {
 		ID:            "dev1",
 		ModemIMEI:     "867383058993207",
 		DeviceBackend: "qmi",
-		ESIMEnabled:   true,
 		VoWiFiEnabled: true,
 		ControlDevice: "/dev/cdc-wdm3", // 运行时路径,不应被持久化
 		Interface:     "wwan2",
@@ -39,11 +39,15 @@ func TestUpdateDeviceInFileDoesNotPersistRuntimePaths(t *testing.T) {
 	if d.ModemIMEI != "867383058993207" || d.DeviceBackend != "qmi" {
 		t.Fatalf("identity/intent fields lost: %+v", d)
 	}
-	if !d.ESIMEnabled {
-		t.Fatalf("confirmed eSIM capability was not persisted: %+v", d)
-	}
 	if d.ControlDevice != "" || d.Interface != "" || d.ATPort != "" || d.USBPath != "" {
 		t.Fatalf("runtime paths must not be persisted, got: %+v", d)
+	}
+	rawAfter, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	if strings.Contains(string(rawAfter), "esim_enabled") {
+		t.Fatalf("legacy runtime eSIM capability was not removed: %s", rawAfter)
 	}
 }
 

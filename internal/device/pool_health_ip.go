@@ -283,6 +283,10 @@ func (p *Pool) healthCheckLoop() {
 
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
+	startupTicker := time.NewTicker(10 * time.Second)
+	defer startupTicker.Stop()
+	startupChecks := 0
+	startupCheckC := startupTicker.C
 
 	// Offset runtime synchronization from the health probe. Starting two
 	// one-minute tickers together made both jobs hit the QMI control plane in
@@ -295,14 +299,15 @@ func (p *Pool) healthCheckLoop() {
 		case <-p.ctx.Done():
 			return
 
-		case <-ticker.C:
-			if p.runHealthCheckTick() {
-				go func() {
-					if err := p.RescanAndReconnect(); err != nil {
-						logger.Warn("定时重连扫描失败", "err", err)
-					}
-				}()
+		case <-startupCheckC:
+			startupChecks++
+			if !p.reconcileHealthCheck("启动期重连扫描") || startupChecks >= 5 {
+				startupTicker.Stop()
+				startupCheckC = nil
 			}
+
+		case <-ticker.C:
+			go p.reconcileHealthCheck("定时重连扫描")
 
 		case <-syncTimer.C:
 			syncTimer.Reset(1 * time.Minute)
@@ -349,6 +354,16 @@ func (p *Pool) healthCheckLoop() {
 			}
 		}
 	}
+}
+
+func (p *Pool) reconcileHealthCheck(reason string) bool {
+	if !p.runHealthCheckTick() {
+		return false
+	}
+	if err := p.RescanAndReconnect(); err != nil {
+		logger.Warn(reason+"失败", "err", err)
+	}
+	return true
 }
 
 func (w *Worker) GetCachedIP() string {

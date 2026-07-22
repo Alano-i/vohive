@@ -1263,13 +1263,6 @@ func smsProfileName(name, serviceProvider, fallback string) string {
 	return "未知 Profile"
 }
 
-func smsWorkerESIMEnabled(worker *device.Worker, managed config.DeviceConfig, managedFound bool) bool {
-	if managedFound {
-		return managed.ESIMEnabled
-	}
-	return worker != nil && worker.ConfigSnapshot().ESIMEnabled
-}
-
 func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 	managed := config.ListDevices()
 	cfgByID := make(map[string]config.DeviceConfig, len(managed))
@@ -1296,11 +1289,6 @@ func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 		esimDeviceSeen[id] = true
 		esimDeviceIDs = append(esimDeviceIDs, id)
 	}
-	for _, cfg := range managed {
-		if cfg.ESIMEnabled {
-			addESIMDeviceID(cfg.ID)
-		}
-	}
 	for _, worker := range workers {
 		status := worker.GetCachedDeviceStatus()
 		currentICCID := strings.TrimSpace(worker.CurrentICCID())
@@ -1313,11 +1301,11 @@ func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 		}
 
 		added := false
-		if smsWorkerESIMEnabled(worker, managedCfg, managedFound) && worker.EsimMgr != nil {
+		if worker.ESIMEnabled() && worker.EsimMgr != nil {
 			if groups, err := worker.EsimMgr.GetProfiles(); err == nil {
 				if len(groups) > 0 {
 					addESIMDeviceID(worker.ID)
-					s.rememberESIMCapability(worker.ID)
+					s.pool.MarkESIMSupported(worker.ID, "sms_profiles")
 				}
 				for _, group := range groups {
 					for _, profile := range group.Profiles {

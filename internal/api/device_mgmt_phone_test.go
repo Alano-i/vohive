@@ -161,6 +161,8 @@ func TestBuildOverviewLiteItemIncludesActiveEsimProfileName(t *testing.T) {
 
 	p := device.NewPool(&config.Config{})
 	w := &device.Worker{ID: "dev-esim", EsimMgr: mgr}
+	setNestedPrivateField(t, p, []string{"workers"}, map[string]*device.Worker{w.ID: w})
+	p.MarkESIMSupported(w.ID, "test")
 	server := &Server{pool: p}
 
 	item := server.buildOverviewLiteItemFromWorker(
@@ -172,6 +174,9 @@ func TestBuildOverviewLiteItemIncludesActiveEsimProfileName(t *testing.T) {
 
 	if item.ActiveESIMProfileName != "China Mobile" {
 		t.Fatalf("ActiveESIMProfileName=%q want=China Mobile", item.ActiveESIMProfileName)
+	}
+	if !item.ESIMEnabled {
+		t.Fatal("runtime-detected eSIM capability was not exposed")
 	}
 }
 
