@@ -433,8 +433,9 @@ func (w *Worker) ProbeDeviceHealth() (bool, error) {
 		// to keep the device resident. QMI core readiness is not a reason to
 		// rebuild an idle AT+QMI worker; it will converge or be retried when the
 		// user enables data.
-		if workerUsesQMIHealthPolicy(w) && !w.Config.NetworkEnabled {
-			control := strings.TrimSpace(w.Config.ControlDevice)
+		cfg := w.ConfigSnapshot()
+		if workerUsesQMIHealthPolicy(w) && !cfg.NetworkEnabled {
+			control := strings.TrimSpace(cfg.ControlDevice)
 			if control != "" {
 				if _, err := os.Stat(control); err == nil {
 					return true, nil

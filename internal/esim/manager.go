@@ -281,6 +281,7 @@ type Manager struct {
 
 	cacheMu                     sync.RWMutex   // 保护 chipInfoCache、overviewCache 与 discoveredEUICCs 等快照状态
 	opMu                        sync.Mutex     // eSIM 硬件操作互斥（同时只允许一个写操作）
+	opStateMu                   sync.Mutex     // 保护 opDone 的替换与读取
 	opDone                      chan struct{}  // 写操作完成通知（替代 TryLock+Sleep 轮询）
 	chipInfoCache               *EUICCChipInfo // 芯片信息缓存（硬件信息基本不变）
 	overviewCache               *EsimOverview  // eSIM 总览缓存（跟随 Manager / Worker 实例）
@@ -309,6 +310,8 @@ type Manager struct {
 	// 如果不为 nil，由 smartCardChannelFactory 新建的 QMIChannel 会自动继承该 context，
 	// 从而允许 BPP 安装阶段的长时延迟得到正确处理而不被默认超时中断。
 	downloadCtx atomic.Pointer[context.Context]
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // ErrOperationInProgress 表示当前有写操作（下载/切换/删除）正在进行中
@@ -449,6 +452,13 @@ func newLPAClientWithChannel(ch driver.SmartCardChannel, aid []byte) (*lpa.Clien
 // NewManager 创建 eSIM 管理器（支持显式选择 AT/QMI 传输）
 func NewManager(opts ManagerOptions) (*Manager, error) {
 	transport := normalizeTransport(opts.Transport)
+	managerCtx, managerCancel := context.WithCancel(context.Background())
+	constructed := false
+	defer func() {
+		if !constructed {
+			managerCancel()
+		}
+	}()
 	mgr := &Manager{
 		modem:                opts.Modem,
 		backend:              opts.Backend,
@@ -467,6 +477,8 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		apduArbiter:          opts.APDUArbiter,
 		postSwitchMinDelay:   defaultPostSwitchMinDelay,
 		readQueueWaitTimeout: defaultReadQueueWaitTimeout,
+		ctx:                  managerCtx,
+		cancel:               managerCancel,
 	}
 	if opts.PostSwitchMinDelay > 0 {
 		mgr.postSwitchMinDelay = opts.PostSwitchMinDelay
@@ -523,7 +535,30 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	}
 	mgr.overviewLoader = mgr.loadOverviewFresh
 	mgr.profilesLoader = mgr.loadProfilesFresh
+	constructed = true
 	return mgr, nil
+}
+
+// Close cancels asynchronous cache refreshes and post-switch callbacks owned
+// by this Manager. Transport resources remain owned by the Worker.
+func (m *Manager) Close() {
+	if m != nil && m.cancel != nil {
+		m.cancel()
+	}
+}
+
+func (m *Manager) done() <-chan struct{} {
+	if m == nil || m.ctx == nil {
+		return nil
+	}
+	return m.ctx.Done()
+}
+
+func (m *Manager) lifecycleContext() context.Context {
+	if m == nil || m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
 }
 
 func (m *Manager) newSmartCardChannel() (driver.SmartCardChannel, error) {
@@ -850,11 +885,6 @@ func (m *Manager) forEachEUICC(fn func(client *lpa.Client, aid []byte, eidStr st
 }
 
 func (m *Manager) waitForNoWriteOperation() error {
-	// 快路径：锁空闲则直接返回
-	if m.opMu.TryLock() {
-		m.opMu.Unlock()
-		return nil
-	}
 	timeout := m.readQueueWaitTimeout
 	if timeout <= 0 {
 		timeout = defaultReadQueueWaitTimeout
@@ -862,23 +892,21 @@ func (m *Manager) waitForNoWriteOperation() error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
+		idle, done := m.observeOperationState()
+		if idle {
+			return nil
+		}
 		select {
-		case <-m.opDone:
-			// 写操作已发出完成通知，尝试确认锁已释放
-			if m.opMu.TryLock() {
-				m.opMu.Unlock()
-				return nil
-			}
+		case <-done:
 		case <-timer.C:
 			return ErrOperationInProgress
+		case <-m.done():
+			return m.ctx.Err()
 		}
 	}
 }
 
 func (m *Manager) acquireOperationLock() error {
-	if m.opMu.TryLock() {
-		return nil
-	}
 	timeout := m.readQueueWaitTimeout
 	if timeout <= 0 {
 		timeout = defaultReadQueueWaitTimeout
@@ -886,19 +914,56 @@ func (m *Manager) acquireOperationLock() error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
-		done := m.opDone
-		if done == nil {
-			done = make(chan struct{})
+		acquired, done := m.tryAcquireOperationLock()
+		if acquired {
+			return nil
 		}
 		select {
 		case <-done:
-			if m.opMu.TryLock() {
-				return nil
-			}
 		case <-timer.C:
 			return ErrOperationInProgress
+		case <-m.done():
+			return m.ctx.Err()
 		}
 	}
+}
+
+// observeOperationState atomically checks whether a writer is active and, if
+// so, subscribes to the completion notification before that writer can release
+// the lock. This prevents a waiter from missing the wake-up and timing out while
+// the operation is already idle.
+func (m *Manager) observeOperationState() (bool, <-chan struct{}) {
+	m.opStateMu.Lock()
+	defer m.opStateMu.Unlock()
+	if m.opDone == nil {
+		m.opDone = make(chan struct{})
+	}
+	if m.opMu.TryLock() {
+		m.opMu.Unlock()
+		return true, nil
+	}
+	return false, m.opDone
+}
+
+func (m *Manager) tryAcquireOperationLock() (bool, <-chan struct{}) {
+	m.opStateMu.Lock()
+	defer m.opStateMu.Unlock()
+	if m.opDone == nil {
+		m.opDone = make(chan struct{})
+	}
+	if m.opMu.TryLock() {
+		return true, nil
+	}
+	return false, m.opDone
+}
+
+func (m *Manager) operationDone() <-chan struct{} {
+	m.opStateMu.Lock()
+	defer m.opStateMu.Unlock()
+	if m.opDone == nil {
+		m.opDone = make(chan struct{})
+	}
+	return m.opDone
 }
 
 func (m *Manager) lockOperation(operation string) (func(), error) {
@@ -908,19 +973,42 @@ func (m *Manager) lockOperation(operation string) (func(), error) {
 	started := time.Now()
 	return func() {
 		m.logWriteOperationHold(operation, started)
+		m.opStateMu.Lock()
 		m.opMu.Unlock()
-		m.notifyWriteDone()
+		m.notifyWriteDoneLocked()
+		m.opStateMu.Unlock()
 	}, nil
 }
 
 // notifyWriteDone 通知所有等待写操作完成的读方。
-// 必须在 opMu.Unlock() 之后立即调用。
 func (m *Manager) notifyWriteDone() {
-	// 关闭旧 channel（广播通知），并新建一个供下次写操作使用
+	m.opStateMu.Lock()
+	m.notifyWriteDoneLocked()
+	m.opStateMu.Unlock()
+}
+
+func (m *Manager) notifyWriteDoneLocked() {
 	old := m.opDone
 	m.opDone = make(chan struct{})
 	if old != nil {
 		close(old)
+	}
+}
+
+func waitContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -1300,7 +1388,7 @@ func cloneOverview(overview *EsimOverview) *EsimOverview {
 func (m *Manager) cachedOverview() *EsimOverview {
 	m.cacheMu.RLock()
 	defer m.cacheMu.RUnlock()
-	return m.overviewCache
+	return cloneOverview(m.overviewCache)
 }
 
 func (m *Manager) setOverviewCache(overview *EsimOverview, err error, generation uint64) {
@@ -1521,7 +1609,7 @@ func (m *Manager) triggerOverviewReload(reason string) {
 			m.overviewReloading = false
 			m.cacheMu.Unlock()
 		}()
-		if err := m.waitForOverviewReloadAllowed(context.Background()); err != nil {
+		if err := m.waitForOverviewReloadAllowed(m.lifecycleContext()); err != nil {
 			logger.Warn("eSIM 总览异步重载等待窗口失败", "device", m.deviceID, "reason", reason, "err", err)
 			return
 		}
@@ -1544,6 +1632,11 @@ func (m *Manager) RefreshOverviewAsync(reason string) {
 	}
 	m.invalidateOverviewCache(reason)
 	go func() {
+		select {
+		case <-m.done():
+			return
+		default:
+		}
 		if err := m.RefreshOverview(); err != nil {
 			logger.Warn("eSIM 总览异步刷新失败", "device", m.deviceID, "reason", reason, "err", err)
 		}
@@ -2049,8 +2142,10 @@ func (m *Manager) SwitchProfile(ctx context.Context, targetICCID string, aidHex 
 func (m *Manager) SwitchProfileWithResult(ctx context.Context, targetICCID string, aidHex string) (SwitchProfileResult, error) {
 	const operation = SwitchOperationEnableProfile
 	result := SwitchProfileResult{TargetICCID: targetICCID}
-	m.opMu.Lock()
-	writeStarted := time.Now()
+	unlock, err := m.lockOperation("switch_profile")
+	if err != nil {
+		return result, err
+	}
 	switchSucceeded := false
 	switchStarted := false
 	var switchToken uint64
@@ -2059,9 +2154,7 @@ func (m *Manager) SwitchProfileWithResult(ctx context.Context, targetICCID strin
 		if !switchSucceeded {
 			m.emitSwitchPhase(operation, switchToken, SwitchPhaseFailed)
 		}
-		m.logWriteOperationHold("switch_profile", writeStarted)
-		m.opMu.Unlock()
-		m.notifyWriteDone()
+		unlock()
 		if !switchSucceeded && switchStarted && m.onSwitchFailed != nil {
 			m.onSwitchFailed(operation, switchToken, switchFailureErr)
 		}
@@ -2155,7 +2248,10 @@ func (m *Manager) SwitchProfileWithResult(ctx context.Context, targetICCID strin
 				"device", m.deviceID,
 				"target", targetICCID,
 				"attempt", fmt.Sprintf("%d/%d", attempt+1, maxCatBusyRetries))
-			time.Sleep(800 * time.Millisecond)
+			if err := waitContext(ctx, 800*time.Millisecond); err != nil {
+				switchFailureErr = err
+				return result, err
+			}
 		}
 	}
 
@@ -2165,7 +2261,10 @@ func (m *Manager) SwitchProfileWithResult(ctx context.Context, targetICCID strin
 	}
 
 	// 5. 给卡片一点时间完成内部刷新动作。
-	time.Sleep(200 * time.Millisecond)
+	if err := waitContext(ctx, 200*time.Millisecond); err != nil {
+		switchFailureErr = err
+		return result, err
+	}
 	releaseSwitchBarrier(SwitchPhaseCardResetSettling)
 
 	if enableErr != nil && !isExpectedCardResetSignal(enableErr) {
@@ -2195,8 +2294,10 @@ func (m *Manager) SwitchProfileWithResult(ctx context.Context, targetICCID strin
 // aidHex 可选，前端已知时直接传入可跳过全量 AID 遍历。
 func (m *Manager) DisableProfile(ctx context.Context, targetICCID string, aidHex string) error {
 	const operation = SwitchOperationDisableProfile
-	m.opMu.Lock()
-	writeStarted := time.Now()
+	unlock, err := m.lockOperation("disable_profile")
+	if err != nil {
+		return err
+	}
 	disableSucceeded := false
 	disableStarted := false
 	var switchToken uint64
@@ -2205,9 +2306,7 @@ func (m *Manager) DisableProfile(ctx context.Context, targetICCID string, aidHex
 		if !disableSucceeded {
 			m.emitSwitchPhase(operation, switchToken, SwitchPhaseFailed)
 		}
-		m.logWriteOperationHold("disable_profile", writeStarted)
-		m.opMu.Unlock()
-		m.notifyWriteDone()
+		unlock()
 		if !disableSucceeded && disableStarted && m.onSwitchFailed != nil {
 			m.onSwitchFailed(operation, switchToken, switchFailureErr)
 		}
@@ -2275,7 +2374,10 @@ func (m *Manager) DisableProfile(ctx context.Context, targetICCID string, aidHex
 		clientClosed = true
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	if err := waitContext(ctx, 200*time.Millisecond); err != nil {
+		switchFailureErr = err
+		return err
+	}
 	releaseSwitchBarrier(SwitchPhaseCardResetSettling)
 
 	if disableErr != nil {
@@ -2307,7 +2409,10 @@ func (m *Manager) runPostSwitchHook(operation SwitchOperation, token uint64) {
 	if m == nil || m.onAfterSwitch == nil {
 		return
 	}
-	hookStart, postSwitchDelayMS := m.waitPostSwitchHookDelay()
+	hookStart, postSwitchDelayMS, ok := m.waitPostSwitchHookDelay()
+	if !ok {
+		return
+	}
 	m.finishPostSwitchHook(operation, token, hookStart, postSwitchDelayMS)
 }
 
@@ -2315,18 +2420,27 @@ func (m *Manager) runPostSwitchRecovery(operation SwitchOperation, token uint64,
 	if m == nil {
 		return
 	}
-	hookStart, postSwitchDelayMS := m.waitPostSwitchHookDelay()
+	hookStart, postSwitchDelayMS, ok := m.waitPostSwitchHookDelay()
+	if !ok {
+		return
+	}
 	m.finishPostSwitchHook(operation, token, hookStart, postSwitchDelayMS)
 }
 
-func (m *Manager) waitPostSwitchHookDelay() (time.Time, int64) {
+func (m *Manager) waitPostSwitchHookDelay() (time.Time, int64, bool) {
 	hookStart := time.Now()
 	delay := m.postSwitchMinDelay
 	if delay <= 0 {
 		delay = defaultPostSwitchMinDelay
 	}
-	time.Sleep(delay)
-	return hookStart, time.Since(hookStart).Milliseconds()
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-m.done():
+		return hookStart, time.Since(hookStart).Milliseconds(), false
+	case <-timer.C:
+		return hookStart, time.Since(hookStart).Milliseconds(), true
+	}
 }
 
 func (m *Manager) finishPostSwitchHook(operation SwitchOperation, token uint64, hookStart time.Time, postSwitchDelayMS int64) {
@@ -2950,13 +3064,11 @@ func (m *Manager) ListNotifications(aidHex string) ([]NotificationItem, error) {
 }
 
 func (m *Manager) RetryNotification(sequenceNumber int64, aidHex string) error {
-	m.opMu.Lock()
-	writeStarted := time.Now()
-	defer func() {
-		m.logWriteOperationHold("retry_notification", writeStarted)
-		m.opMu.Unlock()
-		m.notifyWriteDone()
-	}()
+	unlock, err := m.lockOperation("retry_notification")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if sequenceNumber <= 0 {
 		return NewNotificationError(NotificationErrorInvalidSequence, fmt.Sprintf("无效的通知序号 %d", sequenceNumber), nil)
 	}
@@ -3005,13 +3117,13 @@ func (m *Manager) DownloadProfile(ctx context.Context, aidHex, smdp, matchingID,
 		}
 	}
 	result := DownloadProfileResult{}
-	m.opMu.Lock()
-	writeStarted := time.Now()
+	unlock, err := m.lockOperation("download_profile")
+	if err != nil {
+		return result, err
+	}
 	defer func() {
-		m.logWriteOperationHold("download_profile", writeStarted)
 		m.downloadCtx.Store(nil)
-		m.opMu.Unlock()
-		m.notifyWriteDone()
+		unlock()
 	}()
 	m.downloadCtx.Store(&ctx)
 	var client *lpa.Client
@@ -3227,13 +3339,11 @@ func imeiLuhnCheckDigit(base string) byte {
 // RenameProfile 修改指定 ICCID 的 eSIM profile 名称（Nickname）
 // aidHex 可选，前端已知时直接传入可跳过全量 AID 遍历
 func (m *Manager) RenameProfile(targetICCID string, newName string, aidHex string) error {
-	m.opMu.Lock()
-	writeStarted := time.Now()
-	defer func() {
-		m.logWriteOperationHold("rename_profile", writeStarted)
-		m.opMu.Unlock()
-		m.notifyWriteDone()
-	}()
+	unlock, err := m.lockOperation("rename_profile")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	iccid, err := sgp22.NewICCID(targetICCID)
 	if err != nil {
@@ -3279,13 +3389,11 @@ func (m *Manager) RenameProfile(targetICCID string, newName string, aidHex strin
 // DeleteProfile 删除指定 ICCID 的 eSIM profile
 // aidHex 可选，前端已知时直接传入可跳过全量 AID 遍历
 func (m *Manager) DeleteProfile(targetICCID string, aidHex string) (DeleteProfileResult, error) {
-	m.opMu.Lock()
-	writeStarted := time.Now()
-	defer func() {
-		m.logWriteOperationHold("delete_profile", writeStarted)
-		m.opMu.Unlock()
-		m.notifyWriteDone()
-	}()
+	unlock, err := m.lockOperation("delete_profile")
+	if err != nil {
+		return DeleteProfileResult{}, err
+	}
+	defer unlock()
 
 	result := DeleteProfileResult{}
 	iccid, err := sgp22.NewICCID(targetICCID)

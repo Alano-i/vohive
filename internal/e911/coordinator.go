@@ -104,7 +104,7 @@ func displayName(w *device.Worker) string {
 	if w == nil {
 		return "VoHive"
 	}
-	cfg := w.Config
+	cfg := w.ConfigSnapshot()
 	if cfg.Name != "" {
 		return cfg.Name
 	}

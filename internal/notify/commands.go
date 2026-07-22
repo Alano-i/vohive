@@ -65,8 +65,8 @@ func (m *Manager) handleCmdSendSMS(cmdCtx CommandContext, args []string) string 
 	}
 
 	displayName := worker.ID
-	if worker.Config.Name != "" {
-		displayName = fmt.Sprintf("%s (%s)", worker.Config.Name, worker.ID)
+	if name := worker.ConfigSnapshot().Name; name != "" {
+		displayName = fmt.Sprintf("%s (%s)", name, worker.ID)
 	}
 	isVoWiFi := m.pool.IsVoWiFiActive(deviceID)
 
@@ -169,8 +169,8 @@ func (m *Manager) handleCmdStatus(cmdCtx CommandContext, args []string) string {
 	}
 
 	displayName := worker.ID
-	if worker.Config.Name != "" {
-		displayName = fmt.Sprintf("%s (%s)", worker.Config.Name, worker.ID)
+	if name := worker.ConfigSnapshot().Name; name != "" {
+		displayName = fmt.Sprintf("%s (%s)", name, worker.ID)
 	}
 
 	publicIP := worker.GetCachedIP()
@@ -303,8 +303,8 @@ func (m *Manager) handleCmdList(cmdCtx CommandContext, args []string) string {
 			healthy = "异常"
 		}
 		displayName := w.ID
-		if w.Config.Name != "" {
-			displayName = fmt.Sprintf("%s (%s)", w.Config.Name, w.ID)
+		if name := w.ConfigSnapshot().Name; name != "" {
+			displayName = fmt.Sprintf("%s (%s)", name, w.ID)
 		}
 
 		privateIP := "N/A"
@@ -466,8 +466,8 @@ func (m *Manager) handleCmdEsim(cmdCtx CommandContext, args []string) string {
 
 	var sb strings.Builder
 	displayName := deviceID
-	if worker.Config.Name != "" {
-		displayName = fmt.Sprintf("%s (%s)", worker.Config.Name, deviceID)
+	if name := worker.ConfigSnapshot().Name; name != "" {
+		displayName = fmt.Sprintf("%s (%s)", name, deviceID)
 	}
 	sb.WriteString(fmt.Sprintf("eSIM 列表 / %s\n\n", displayName))
 
@@ -638,8 +638,8 @@ func (m *Manager) handleCmdCall(cmdCtx CommandContext, args []string) string {
 	}
 
 	displayName := worker.ID
-	if worker.Config.Name != "" {
-		displayName = fmt.Sprintf("%s (%s)", worker.Config.Name, worker.ID)
+	if name := worker.ConfigSnapshot().Name; name != "" {
+		displayName = fmt.Sprintf("%s (%s)", name, worker.ID)
 	}
 	caller := "未知"
 	if worker.Modem != nil {

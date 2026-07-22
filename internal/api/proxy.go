@@ -287,7 +287,7 @@ func (s *Server) buildProxyConfigs(ctx context.Context) ([]server.InstanceConfig
 		if w == nil {
 			continue
 		}
-		iface := strings.TrimSpace(w.Config.Interface)
+		iface := strings.TrimSpace(w.ConfigSnapshot().Interface)
 		if iface != "" {
 			deviceInterface[w.ID] = iface
 		}

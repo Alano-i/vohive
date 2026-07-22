@@ -32,6 +32,23 @@ func waitForCondition(ctx context.Context, interval time.Duration, check func() 
 	}
 }
 
+func waitContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (p *Pool) waitWorkerReady(deviceID string, timeout time.Duration) error {
 	waitCtx, cancel := context.WithTimeout(p.ctx, timeout)
 	defer cancel()

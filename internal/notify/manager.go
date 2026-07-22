@@ -309,8 +309,8 @@ func (m *Manager) NotifyRaw(msg string) {
 func (m *Manager) NotifyIPRotated(deviceID, oldIP, newIP string, duration time.Duration) {
 	displayName := deviceID
 	if m.pool != nil {
-		if worker := m.pool.GetWorker(deviceID); worker != nil && worker.Config.Name != "" {
-			displayName = fmt.Sprintf("%s (%s)", worker.Config.Name, deviceID)
+		if worker := m.pool.GetWorker(deviceID); worker != nil && worker.ConfigSnapshot().Name != "" {
+			displayName = fmt.Sprintf("%s (%s)", worker.ConfigSnapshot().Name, deviceID)
 		}
 	}
 	msg := fmt.Sprintf("公网切换 / 完成\n设备    %s\n旧 IP   %s\n新 IP   %s\n耗时    %s", displayName, oldIP, newIP, duration.String())
@@ -351,7 +351,7 @@ func (m *Manager) resolveDeviceName(deviceID string) string {
 	if worker == nil {
 		return ""
 	}
-	return strings.TrimSpace(worker.Config.Name)
+	return strings.TrimSpace(worker.ConfigSnapshot().Name)
 }
 
 func (m *Manager) resolveDevicePhoneNumber(deviceID string) string {

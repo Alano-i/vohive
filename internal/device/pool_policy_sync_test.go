@@ -20,13 +20,14 @@ func TestSetWorkerVoWiFiPolicySyncsConfig(t *testing.T) {
 	p, w := newPoolWithWorkerForSync("wwan0", config.DeviceConfig{NetworkEnabled: true})
 
 	p.SetWorkerVoWiFiPolicy("wwan0", true)
-	if !w.Config.VoWiFiEnabled || !w.Config.AirplaneEnabled || w.Config.NetworkEnabled {
-		t.Fatalf("开 vowifi 应 vowifi=T airplane=T network=F: %+v", w.Config)
+	cfg := w.ConfigSnapshot()
+	if !cfg.VoWiFiEnabled || !cfg.AirplaneEnabled || cfg.NetworkEnabled {
+		t.Fatalf("开 vowifi 应 vowifi=T airplane=T network=F: %+v", cfg)
 	}
 
 	p.SetWorkerVoWiFiPolicy("wwan0", false)
-	if w.Config.VoWiFiEnabled {
-		t.Fatalf("关 vowifi 应清 vowifi=F: %+v", w.Config)
+	if cfg := w.ConfigSnapshot(); cfg.VoWiFiEnabled {
+		t.Fatalf("关 vowifi 应清 vowifi=F: %+v", cfg)
 	}
 }
 
@@ -35,13 +36,14 @@ func TestSetWorkerAirplanePolicySyncsConfig(t *testing.T) {
 	p, w := newPoolWithWorkerForSync("wwan0", config.DeviceConfig{VoWiFiEnabled: true, NetworkEnabled: true})
 
 	p.SetWorkerAirplanePolicy("wwan0", true)
-	if !w.Config.AirplaneEnabled || w.Config.VoWiFiEnabled || w.Config.NetworkEnabled {
-		t.Fatalf("开飞行应 airplane=T vowifi=F network=F: %+v", w.Config)
+	cfg := w.ConfigSnapshot()
+	if !cfg.AirplaneEnabled || cfg.VoWiFiEnabled || cfg.NetworkEnabled {
+		t.Fatalf("开飞行应 airplane=T vowifi=F network=F: %+v", cfg)
 	}
 
 	p.SetWorkerAirplanePolicy("wwan0", false)
-	if w.Config.AirplaneEnabled {
-		t.Fatalf("关飞行应 airplane=F: %+v", w.Config)
+	if cfg := w.ConfigSnapshot(); cfg.AirplaneEnabled {
+		t.Fatalf("关飞行应 airplane=F: %+v", cfg)
 	}
 }
 
@@ -50,10 +52,11 @@ func TestSetWorkerNetworkPolicyMutualExclusion(t *testing.T) {
 	p, w := newPoolWithWorkerForSync("wwan0", config.DeviceConfig{VoWiFiEnabled: true, AirplaneEnabled: true})
 
 	p.SetWorkerNetworkPolicy("wwan0", true, "v4v6", "ims")
-	if !w.Config.NetworkEnabled || w.Config.VoWiFiEnabled || w.Config.AirplaneEnabled {
-		t.Fatalf("开网络应互斥关 vowifi/airplane: %+v", w.Config)
+	cfg := w.ConfigSnapshot()
+	if !cfg.NetworkEnabled || cfg.VoWiFiEnabled || cfg.AirplaneEnabled {
+		t.Fatalf("开网络应互斥关 vowifi/airplane: %+v", cfg)
 	}
-	if w.Config.IPVersion != "v4v6" || w.Config.APN != "ims" {
-		t.Fatalf("ip/apn 应同步: %+v", w.Config)
+	if cfg.IPVersion != "v4v6" || cfg.APN != "ims" {
+		t.Fatalf("ip/apn 应同步: %+v", cfg)
 	}
 }

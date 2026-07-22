@@ -18,6 +18,19 @@ import (
 
 var wecomPlaceholderPattern = regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_]+)\s*\}\}`)
 
+const maxWeComResponseBody = 1 << 20
+
+func readWeComResponse(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxWeComResponseBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxWeComResponseBody {
+		return nil, errors.New("企业微信响应体过大")
+	}
+	return data, nil
+}
+
 type WeComChannel struct {
 	cfg      config.WeComConfig
 	client   *http.Client
@@ -187,7 +200,10 @@ func (w *WeComChannel) SendWithContextDetailed(ctx NotificationContext) (SendWeC
 		return result, fmt.Errorf("企业微信发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readWeComResponse(resp.Body)
+	if err != nil {
+		return result, fmt.Errorf("读取企业微信发送响应失败: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return result, fmt.Errorf("企业微信发送 HTTP 状态码错误: %d", resp.StatusCode)
 	}
@@ -230,7 +246,10 @@ func (w *WeComChannel) accessToken() (string, error) {
 		return "", fmt.Errorf("请求企业微信 access_token 失败: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readWeComResponse(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取企业微信 access_token 响应失败: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("企业微信 access_token HTTP 状态码错误: %d", resp.StatusCode)
 	}

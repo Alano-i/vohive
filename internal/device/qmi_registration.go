@@ -23,15 +23,18 @@ var (
 
 const (
 	qmiRegistrationForceSearchAfterTries                = 2
-	qmiRegistrationRadioCycleAfterTries                 = 30
+	qmiRegistrationUnregisteredRadioCycleAfterTries     = 30
+	qmiRegistrationSearchingRadioCycleAfterTries        = 150
+	qmiRegistrationPostRadioCycleGraceTries             = 30
+	qmiRegistrationDefaultMaxAttempts                   = qmiRegistrationSearchingRadioCycleAfterTries + qmiRegistrationPostRadioCycleGraceTries
 	qmiRegistrationUnsupportedForceRadioCycleAfterTries = 3
 
 	// qmiRegistrationTimeoutDataRequired 用于数据网络必须就绪的协调路径（如 StartNetwork），
-	// DMS/NAS 偶发卡顿时仍要尽量等到驻网完成。
-	qmiRegistrationTimeoutDataRequired = 90 * time.Second
+	// DMS/NAS 偶发卡顿及漫游选网较慢时仍要尽量等到驻网完成。
+	qmiRegistrationTimeoutDataRequired = 390 * time.Second
 	// qmiRegistrationTimeoutBestEffort 用于网络未开启时的驻网保活。该窗口必须覆盖
-	// qmiRegistrationRadioCycleAfterTries，否则切卡后长期未注册的模组永远走不到 radio cycle。
-	qmiRegistrationTimeoutBestEffort = 75 * time.Second
+	// radio cycle 前的搜网和 cycle 后的完整宽限期，避免恢复动作刚完成就因超时退出。
+	qmiRegistrationTimeoutBestEffort = 375 * time.Second
 )
 
 func qmiRegistrationTimeout(requiredForData bool) time.Duration {
@@ -73,7 +76,7 @@ func normalizeQMIRegistrationOptions(opts qmiRegistrationOptions) qmiRegistratio
 		opts.PollInterval = 2 * time.Second
 	}
 	if opts.MaxAttempts <= 0 {
-		opts.MaxAttempts = 45
+		opts.MaxAttempts = qmiRegistrationDefaultMaxAttempts
 	}
 	return opts
 }
@@ -188,7 +191,7 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 					}
 				}
 			}
-			if shouldRadioCycleForQMIRegistration(attempt, registerIssued, radioCycleIssued, forceNetworkSearchUnsupported, radioRestoredOnline) {
+			if shouldRadioCycleForQMIRegistration(attempt, ss.RegStatus, registerIssued, radioCycleIssued, forceNetworkSearchUnsupported, radioRestoredOnline) {
 				if opts.SuppressRadioCycle != nil && opts.SuppressRadioCycle() {
 					logger.Info("QMI 驻网恢复暂缓 radio cycle：运营商扫描进行中", "device", deviceID, "attempt", attempt)
 				} else {
@@ -272,17 +275,27 @@ func shouldForceNetworkSearchForQMIRegistration(attempt int, registerIssued bool
 	return registerIssued && !forceNetworkSearchIssued && !forceNetworkSearchUnsupported && attempt >= qmiRegistrationForceSearchAfterTries
 }
 
-func shouldRadioCycleForQMIRegistration(attempt int, registerIssued bool, radioCycleIssued bool, forceNetworkSearchUnsupported bool, radioRestoredOnline bool) bool {
+func shouldRadioCycleForQMIRegistration(attempt int, regStatus int, registerIssued bool, radioCycleIssued bool, forceNetworkSearchUnsupported bool, radioRestoredOnline bool) bool {
 	if !registerIssued || radioCycleIssued {
 		return false
 	}
 	if radioRestoredOnline {
-		return attempt >= qmiRegistrationRadioCycleAfterTries
+		return attempt >= qmiRegistrationRadioCycleThreshold(regStatus)
 	}
 	if forceNetworkSearchUnsupported {
 		return attempt >= qmiRegistrationUnsupportedForceRadioCycleAfterTries
 	}
-	return attempt >= qmiRegistrationRadioCycleAfterTries
+	return attempt >= qmiRegistrationRadioCycleThreshold(regStatus)
+}
+
+func qmiRegistrationRadioCycleThreshold(regStatus int) int {
+	if regStatus == 2 {
+		// Searching is an active, healthy modem state. International roaming may
+		// legitimately remain here for several minutes; cycling RF too early
+		// restarts PLMN search and delays registration further.
+		return qmiRegistrationSearchingRadioCycleAfterTries
+	}
+	return qmiRegistrationUnregisteredRadioCycleAfterTries
 }
 
 func radioCycleQMIForRegistration(ctx context.Context, deviceID string, ctrl qmiRegistrationController, wait time.Duration) error {
@@ -410,7 +423,7 @@ func (w *Worker) ensureQMIRegistration(ctx context.Context, requiredForData bool
 	ctx, cancel := context.WithTimeout(ctx, qmiRegistrationTimeout(requiredForData))
 	defer cancel()
 
-	return ensureQMIRegistration(ctx, w.ID, w.Config, w.QMICore, ctrl, qmiRegistrationOptions{
+	return ensureQMIRegistration(ctx, w.ID, w.ConfigSnapshot(), w.QMICore, ctrl, qmiRegistrationOptions{
 		SuppressRadioCycle: w.IsOperatorScanActive,
 	})
 }

@@ -225,7 +225,7 @@ func (w *Worker) ensureMBIMRegistration(ctx context.Context, requiredForData boo
 	}
 	ctx, cancel := context.WithTimeout(ctx, mbimRegistrationTimeout(requiredForData))
 	defer cancel()
-	return ensureMBIMRegistration(ctx, w.ID, w.Config, ctrl, mbimRegistrationOptions{
+	return ensureMBIMRegistration(ctx, w.ID, w.ConfigSnapshot(), ctrl, mbimRegistrationOptions{
 		SuppressRadioCycle: w.IsOperatorScanActive,
 	})
 }

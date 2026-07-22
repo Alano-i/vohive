@@ -114,8 +114,8 @@ func TestNetworkPatchKeepsPolicyAndWaitsForQMIWhenCoreIsNotReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !policy.NetworkEnabled || !worker.Config.NetworkEnabled {
-		t.Fatalf("network intent was not preserved: policy=%+v worker=%+v", policy, worker.Config)
+	if cfg := worker.ConfigSnapshot(); !policy.NetworkEnabled || !cfg.NetworkEnabled {
+		t.Fatalf("network intent was not preserved: policy=%+v worker=%+v", policy, cfg)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestNetworkPatchRollsBackPolicyOnNonRecoverableStartFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.NetworkEnabled || worker.Config.NetworkEnabled {
+	if policy.NetworkEnabled || worker.ConfigSnapshot().NetworkEnabled {
 		t.Fatalf("failed start left network enabled: policy=%+v worker=%+v", policy, worker.Config)
 	}
 }

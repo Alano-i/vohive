@@ -17,16 +17,17 @@ func TestApplyPolicyProjectsFields(t *testing.T) {
 		ICCID: "x", NetworkEnabled: true, VoWiFiEnabled: true,
 		AirplaneEnabled: true, IPVersion: "v4v6", APN: "ims",
 	})
-	if w.Config.NetworkEnabled || !w.Config.VoWiFiEnabled || !w.Config.AirplaneEnabled {
-		t.Fatalf("开关未投影: %+v", w.Config)
+	cfg := w.ConfigSnapshot()
+	if cfg.NetworkEnabled || !cfg.VoWiFiEnabled || !cfg.AirplaneEnabled {
+		t.Fatalf("开关未投影: %+v", cfg)
 	}
-	if !w.restoreNetworkAfterVoWiFi {
+	if !w.shouldRestoreNetworkAfterVoWiFi() {
 		t.Fatal("VoWiFi 应保留原网络意图供关闭后恢复")
 	}
-	if w.Config.IPVersion != "v4v6" || w.Config.APN != "ims" {
-		t.Fatalf("ip/apn 未投影: %+v", w.Config)
+	if cfg.IPVersion != "v4v6" || cfg.APN != "ims" {
+		t.Fatalf("ip/apn 未投影: %+v", cfg)
 	}
-	if !w.Config.SMSEnabled {
+	if !cfg.SMSEnabled {
 		t.Fatal("SMS 应恒为 true")
 	}
 }
@@ -116,7 +117,7 @@ func TestResolveAndApplyPolicy_ResolvesAndProjects(t *testing.T) {
 	if !res.Applied {
 		t.Fatalf("应成功应用: %+v", res)
 	}
-	if !w.Config.AirplaneEnabled {
+	if !w.ConfigSnapshot().AirplaneEnabled {
 		t.Fatal("策略投影失败")
 	}
 	if len(stub.setOpModeCalls) != 1 || stub.setOpModeCalls[0] != backend.ModeRFOff {

@@ -72,7 +72,7 @@ func (p *Pool) SwitchWorkerBackend(deviceID string, cfg config.DeviceConfig) err
 		return fmt.Errorf("设备运行时已变化，请重试")
 	}
 	worker.Backend = nextBackend
-	worker.Config = cfg
+	worker.replaceConfig(cfg)
 	p.mu.Unlock()
 
 	p.configureWorkerSMSRuntime(worker, targetMode)

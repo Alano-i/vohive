@@ -192,7 +192,7 @@ func (s *Server) handleDeviceMgmtSetOperatorSelection(c *gin.Context) {
 	}
 
 	// Persist to file
-	if err := config.UpdateDeviceInFile(s.configPath, deviceID, w.Config); err != nil {
+	if err := config.UpdateDeviceInFile(s.configPath, deviceID, w.ConfigSnapshot()); err != nil {
 		logger.Error("写入设备配置失败 (operator selection)", "device", deviceID, "err", err)
 	}
 

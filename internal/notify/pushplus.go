@@ -2,25 +2,45 @@ package notify
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/iniwex5/vohive/internal/config"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
 type PushplusChannel struct {
-	cfg config.PushplusConfig
+	cfg      config.PushplusConfig
+	client   *http.Client
+	endpoint string
+}
+
+const (
+	defaultPushplusEndpoint = "https://www.pushplus.plus/send"
+	maxPushplusResponseBody = 1 << 20
+)
+
+type pushplusResponse struct {
+	Code int             `json:"code"`
+	Msg  string          `json:"msg"`
+	Data json.RawMessage `json:"data"`
 }
 
 func NewPushplusChannel(cfg config.PushplusConfig) (*PushplusChannel, error) {
 	if strings.TrimSpace(cfg.Token) == "" {
 		return nil, errors.New("pushplus token is required")
 	}
-	return &PushplusChannel{cfg: cfg}, nil
+	return &PushplusChannel{
+		cfg:      cfg,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		endpoint: defaultPushplusEndpoint,
+	}, nil
 }
 
 func (c *PushplusChannel) Name() string {
@@ -59,7 +79,12 @@ func (c *PushplusChannel) SendWithContext(ctx NotificationContext) error {
 		return err
 	}
 
-	resp, err := http.Post("http://www.pushplus.plus/send", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
 	if err != nil {
 		logger.Warn("Pushplus 发送失败", "err", err)
 		return err
@@ -70,6 +95,20 @@ func (c *PushplusChannel) SendWithContext(ctx NotificationContext) error {
 		err := fmt.Errorf("http status code %d", resp.StatusCode)
 		logger.Warn("Pushplus 发送失败", "err", err)
 		return err
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxPushplusResponseBody+1))
+	if err != nil {
+		return fmt.Errorf("读取 Pushplus 响应失败: %w", err)
+	}
+	if len(responseBody) > maxPushplusResponseBody {
+		return errors.New("pushplus 响应体过大")
+	}
+	var result pushplusResponse
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return fmt.Errorf("解析 Pushplus 响应失败: %w", err)
+	}
+	if result.Code != 200 && result.Code != 0 {
+		return fmt.Errorf("pushplus 发送失败 %d: %s", result.Code, result.Msg)
 	}
 
 	return nil
@@ -84,5 +123,8 @@ func (c *PushplusChannel) Start() error {
 }
 
 func (c *PushplusChannel) Close() error {
+	if c != nil && c.client != nil {
+		c.client.CloseIdleConnections()
+	}
 	return nil
 }

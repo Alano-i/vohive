@@ -591,9 +591,9 @@ func (s *Server) handleDeviceMgmtList(c *gin.Context) {
 	items := make([]deviceMgmtListItem, 0, len(workers))
 	for _, w := range workers {
 		workerByID[w.ID] = true
-		cfg := w.Config
+		cfg := w.ConfigSnapshot()
 		if v, ok := cfgByID[w.ID]; ok {
-			cfg = overviewDisplayConfig(w.Config, v, true)
+			cfg = overviewDisplayConfig(cfg, v, true)
 		}
 		status := w.GetCachedDeviceStatus()
 		controlOnline := w.GetCachedHealthy()
@@ -720,9 +720,9 @@ func (s *Server) handleDeviceMgmtOverviewLite(c *gin.Context) {
 			if w.ID != id {
 				continue
 			}
-			cfg := w.Config
+			cfg := w.ConfigSnapshot()
 			if v, ok := cfgByID[w.ID]; ok {
-				cfg = overviewDisplayConfig(w.Config, v, true)
+				cfg = overviewDisplayConfig(cfg, v, true)
 			}
 			if liveRefresh {
 				_ = w.RefreshRuntime(c.Request.Context(), "overview_detail")
@@ -786,9 +786,9 @@ func (s *Server) handleDeviceMgmtOverviewLite(c *gin.Context) {
 	tagByID := map[string]string{}
 	tags := make([]string, 0, len(workers))
 	for _, w := range workers {
-		cfg := w.Config
+		cfg := w.ConfigSnapshot()
 		if v, ok := cfgByID[w.ID]; ok {
-			cfg = overviewDisplayConfig(w.Config, v, true)
+			cfg = overviewDisplayConfig(cfg, v, true)
 		}
 		if cfg.Interface == "" {
 			continue
@@ -804,9 +804,9 @@ func (s *Server) handleDeviceMgmtOverviewLite(c *gin.Context) {
 	items := make([]deviceMgmtOverviewLiteItem, 0, len(workers))
 	for _, w := range workers {
 		workerByID[w.ID] = true
-		cfg := w.Config
+		cfg := w.ConfigSnapshot()
 		if v, ok := cfgByID[w.ID]; ok {
-			cfg = overviewDisplayConfig(w.Config, v, true)
+			cfg = overviewDisplayConfig(cfg, v, true)
 		}
 		status := w.GetCachedDeviceStatus() // 批量列表读缓存，0 IPC
 		item := s.buildOverviewLiteItemFromWorker(w, cfg, status, nil)
@@ -873,10 +873,11 @@ func (s *Server) handleDeviceMgmtGetDeviceConfig(c *gin.Context) {
 	}
 	cfgDTO := deviceConfigToDTO(*md)
 	if worker := s.pool.GetWorker(id); worker != nil {
-		cfgDTO.Interface = worker.Config.Interface
-		cfgDTO.ControlDevice = worker.Config.ControlDevice
+		cfg := worker.ConfigSnapshot()
+		cfgDTO.Interface = cfg.Interface
+		cfgDTO.ControlDevice = cfg.ControlDevice
 		cfgDTO.ATPort = worker.ResolvedATPort()
-		cfgDTO.USBPath = worker.Config.USBPath
+		cfgDTO.USBPath = cfg.USBPath
 	}
 	c.JSON(http.StatusOK, gin.H{"config": cfgDTO})
 }
@@ -2328,7 +2329,7 @@ func (s *Server) handleDeviceMgmtSetFlightMode(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "设备尚未识别到 SIM 卡 ICCID，无法保存飞行模式策略"})
 		return
 	}
-	// 同步 w.Config，使概览即时反映飞行/在线模式（setWorkerFlightMode 只切硬件不碰 Config）。
+	// 同步 Worker 运行时配置，使概览即时反映飞行/在线模式。
 	s.pool.SetWorkerAirplanePolicy(id, flightModeEnabled)
 
 	operatingMode, flightMode, err := setWorkerFlightMode(c.Request.Context(), worker, flightModeEnabled)
@@ -2456,7 +2457,7 @@ func validateRebootWorkerIdentity(ctx context.Context, worker *device.Worker) er
 	if worker == nil || worker.Backend == nil {
 		return nil
 	}
-	expectedIMEI := strings.TrimSpace(worker.Config.ModemIMEI)
+	expectedIMEI := strings.TrimSpace(worker.ConfigSnapshot().ModemIMEI)
 	if expectedIMEI == "" {
 		return nil
 	}
@@ -2486,7 +2487,7 @@ func (s *Server) handleDeviceMgmtReconnectVoWiFi(c *gin.Context) {
 
 	// VoWiFi 开关已跟卡走、只存在于运行时投影。门禁读 worker 的有效策略；
 	// 无 worker 时跳过友好门禁，交由 RestartVoWiFi 报告底层错误。
-	if worker := s.pool.GetWorker(id); worker != nil && !worker.Config.VoWiFiEnabled {
+	if worker := s.pool.GetWorker(id); worker != nil && !worker.ConfigSnapshot().VoWiFiEnabled {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "设备未开启 VoWiFi，无法重连"})
 		return
 	}
@@ -2556,8 +2557,8 @@ func (s *Server) handleDeviceMgmtOverviewStreamSingle(c *gin.Context) {
 		if w != nil {
 			status := w.GetCachedDeviceStatus()
 			trueVal := true
-			// 用运行时投影(w.Config)合并展示，使策略字段反映跟卡走的有效值
-			item = s.buildOverviewLiteDetailItemFromWorker(w, overviewDisplayConfig(w.Config, *md, true), status, &trueVal)
+			// 用 Worker 运行时投影合并展示，使策略字段反映跟卡走的有效值。
+			item = s.buildOverviewLiteDetailItemFromWorker(w, overviewDisplayConfig(w.ConfigSnapshot(), *md, true), status, &trueVal)
 			if overviewRealtimeTrafficEnabled(item) {
 				tag := w.ID + "@" + md.Interface
 				ps, rx, tx, _ := db.GetLatestMinuteDeltas("iface", tag)

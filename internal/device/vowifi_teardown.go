@@ -45,7 +45,7 @@ func (p *Pool) restoreSMSModeAfterVoWiFiTeardown(w *Worker) {
 	}
 
 	logger.Info("短信模式已恢复", "device", w.ID, "sms_mode", w.smsMode.String())
-	w.restoreNetworkAfterVoWiFi = false
+	w.setRestoreNetworkAfterVoWiFi(false)
 }
 
 func (p *Pool) RestoreRadioAfterVoWiFi(deviceID string) error {

@@ -6,48 +6,50 @@ import (
 
 	"github.com/iniwex5/vohive/internal/backend"
 	"github.com/iniwex5/vohive/internal/cardpolicy"
+	"github.com/iniwex5/vohive/internal/config"
 	mbimcore "github.com/iniwex5/vohive/internal/mbim"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
-// applyPolicyToWorker 把卡策略投影进 worker.Config 的运行时有效字段。
+// applyPolicyToWorker 把卡策略投影进 worker 的运行时有效配置。
 // 不在此触发 re-apply，仅做纯投影，便于单测。
 func applyPolicyToWorker(w *Worker, p cardpolicy.Policy) {
 	if w == nil {
 		return
 	}
-	w.Config.NetworkEnabled = p.NetworkEnabled
-	w.Config.VoWiFiEnabled = p.VoWiFiEnabled
-	w.Config.AirplaneEnabled = p.AirplaneEnabled
-	if p.VoWiFiEnabled {
-		// VoWiFi 接管射频时，蜂窝数据面必须保持关闭；保留的网络意图
-		// 记录在 restoreNetworkAfterVoWiFi，关闭 VoWiFi 后可重新投影。
-		w.Config.NetworkEnabled = false
-		w.Config.AirplaneEnabled = true
-	} else if p.AirplaneEnabled {
-		w.Config.NetworkEnabled = false
-	}
-	w.Config.IPVersion = strings.TrimSpace(p.IPVersion)
-	if w.Config.IPVersion == "" {
-		w.Config.IPVersion = "v4"
-	}
-	w.Config.APN = strings.TrimSpace(p.APN)
-	w.Config.SMSEnabled = true // SMS 恒开
-	w.restoreNetworkAfterVoWiFi = p.NetworkEnabled
+	w.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.NetworkEnabled = p.NetworkEnabled
+		cfg.VoWiFiEnabled = p.VoWiFiEnabled
+		cfg.AirplaneEnabled = p.AirplaneEnabled
+		if p.VoWiFiEnabled {
+			cfg.NetworkEnabled = false
+			cfg.AirplaneEnabled = true
+		} else if p.AirplaneEnabled {
+			cfg.NetworkEnabled = false
+		}
+		cfg.IPVersion = strings.TrimSpace(p.IPVersion)
+		if cfg.IPVersion == "" {
+			cfg.IPVersion = "v4"
+		}
+		cfg.APN = strings.TrimSpace(p.APN)
+		cfg.SMSEnabled = true
+	})
+	w.setRestoreNetworkAfterVoWiFi(p.NetworkEnabled)
 }
 
 func syncWorkerPolicyDataConfig(w *Worker) error {
 	if w == nil {
 		return nil
 	}
+	cfg := w.ConfigSnapshot()
 	if w.QMICore != nil {
-		if err := w.QMICore.SetDataConfig(w.Config.APN, w.Config.IPVersion); err != nil {
+		if err := w.QMICore.SetDataConfig(cfg.APN, cfg.IPVersion); err != nil {
 			return err
 		}
 	}
 	if w.MBIMCore != nil {
 		w.MBIMCore.SetDataConfig(mbimcore.DataConfig{
-			APN: w.Config.APN, Interface: w.Config.Interface, IPVersion: w.Config.IPVersion,
+			APN: cfg.APN, Interface: cfg.Interface, IPVersion: cfg.IPVersion,
 		})
 	}
 	return nil
@@ -81,7 +83,7 @@ func (p *Pool) resolveAndApplyPolicy(worker *Worker, reason string) policyApplyR
 	}
 	logger.Info("已投影卡策略", "device", worker.ID, "iccid", iccid,
 		"network", pol.NetworkEnabled, "vowifi", pol.VoWiFiEnabled,
-		"airplane", worker.Config.AirplaneEnabled, "reason", reason)
+		"airplane", worker.ConfigSnapshot().AirplaneEnabled, "reason", reason)
 
 	// 三态分支：VoWiFi / 纯飞行 / 在线(含连网)。射频模式按策略真正切换，
 	// 补齐此前“airplane 字段被投影但从不执行”的缺口。

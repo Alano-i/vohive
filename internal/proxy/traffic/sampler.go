@@ -230,13 +230,13 @@ func (s *Sampler) poolWorkerInterfaces() []workerInterface {
 			continue
 		}
 		id := strings.TrimSpace(w.ID)
-		iface := strings.TrimSpace(w.Config.Interface)
+		iface := strings.TrimSpace(w.ConfigSnapshot().Interface)
 		if id == "" || iface == "" {
 			continue
 		}
 		worker := w
 		networkReady := func() bool {
-			return worker.Config.NetworkEnabled && worker.NetworkConnected()
+			return worker.ConfigSnapshot().NetworkEnabled && worker.NetworkConnected()
 		}
 		var readCounters func(context.Context) (trafficCounters, error)
 		if qmiCore := worker.QMICore; qmiCore != nil {

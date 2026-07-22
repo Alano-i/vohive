@@ -139,7 +139,7 @@ func isRecoverableQMINetworkStartError(worker *device.Worker, err error) bool {
 	if worker == nil || err == nil {
 		return false
 	}
-	isQMI := worker.QMICore != nil || strings.EqualFold(strings.TrimSpace(worker.Config.DeviceBackend), backend.BackendQMI)
+	isQMI := worker.QMICore != nil || strings.EqualFold(strings.TrimSpace(worker.ConfigSnapshot().DeviceBackend), backend.BackendQMI)
 	if worker.Backend != nil {
 		isQMI = isQMI || strings.EqualFold(strings.TrimSpace(worker.Backend.Mode()), backend.BackendQMI)
 	}
@@ -247,7 +247,7 @@ func (s *Server) handleDeviceVoWiFiPatch(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"status": "error", "message": "设备尚未识别到 SIM 卡 ICCID，无法保存 VoWiFi 策略"})
 			return
 		}
-		// 同步 w.Config，使概览即时切到 VoWiFi 模式面板（EnableVoWiFi 不碰 Config）。
+		// 同步 Worker 运行时配置，使概览即时切到 VoWiFi 模式面板。
 		s.pool.SetWorkerVoWiFiPolicy(deviceID, true)
 		if err := s.requestVoWiFiEnable(deviceID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{

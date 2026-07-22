@@ -48,7 +48,7 @@ func TestClientProxyOpenRunsBeforeInitialSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	client, err := NewClientWithOptions(ctx, devicePath, ClientOptions{UseProxy: true})
+	client, err := NewClientWithOptions(ctx, devicePath, ClientOptions{UseProxy: true, SyncOnOpen: true})
 	if err != nil {
 		t.Fatalf("NewClientWithOptions() error = %v", err)
 	}
@@ -114,6 +114,118 @@ func TestClientProxyAllocateClientIDAfterOpen(t *testing.T) {
 	}
 	if got != clientID {
 		t.Fatalf("client ID = 0x%02x, want 0x%02x", got, clientID)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReleaseAllClientIDsWithContext(t *testing.T) {
+	const devicePath = "/dev/cdc-wdm-release-all"
+	allocations := []struct {
+		service  uint8
+		clientID uint8
+	}{
+		{service: ServiceDMS, clientID: 0x21},
+		{service: ServiceWDS, clientID: 0x31},
+		{service: ServiceWDS, clientID: 0x32},
+		{service: ServiceNAS, clientID: 0x22},
+	}
+	expectedByService := make(map[uint8][]uint8)
+	for _, allocated := range allocations {
+		expectedByService[allocated.service] = append(expectedByService[allocated.service], allocated.clientID)
+	}
+
+	errCh := withProxyTransportForTest(t, func(conn net.Conn) error {
+		defer conn.Close()
+		openReq, err := readQMIFrameFromConn(conn)
+		if err != nil {
+			return err
+		}
+		if err := writeCTLSuccess(conn, openReq); err != nil {
+			return err
+		}
+		allocatedCount := make(map[uint8]int)
+		for range allocations {
+			req, err := readQMIFrameFromConn(conn)
+			if err != nil {
+				return err
+			}
+			if err := assertCTLRequest(req, CTLGetClientID); err != nil {
+				return err
+			}
+			tlv := FindTLV(req.TLVs, 0x01)
+			if tlv == nil || len(tlv.Value) != 1 {
+				return fmt.Errorf("allocate client ID request missing service TLV")
+			}
+			service := tlv.Value[0]
+			serviceAllocations := expectedByService[service]
+			index := allocatedCount[service]
+			if index >= len(serviceAllocations) {
+				return fmt.Errorf("unexpected allocation service 0x%02x", tlv.Value[0])
+			}
+			clientID := serviceAllocations[index]
+			allocatedCount[service] = index + 1
+			if err := writeCTLResponse(conn, req, []TLV{
+				successTLV(),
+				{Type: 0x01, Value: []byte{service, clientID}},
+			}); err != nil {
+				return err
+			}
+		}
+		released := make(map[[2]uint8]bool, len(allocations))
+		releaseOrder := make([][2]uint8, 0, len(allocations))
+		for range allocations {
+			req, err := readQMIFrameFromConn(conn)
+			if err != nil {
+				return err
+			}
+			if err := assertCTLRequest(req, CTLReleaseClientID); err != nil {
+				return err
+			}
+			tlv := FindTLV(req.TLVs, 0x01)
+			if tlv == nil || len(tlv.Value) != 2 {
+				return fmt.Errorf("release client ID request missing service/client TLV")
+			}
+			releasedID := [2]uint8{tlv.Value[0], tlv.Value[1]}
+			released[releasedID] = true
+			releaseOrder = append(releaseOrder, releasedID)
+			if err := writeCTLSuccess(conn, req); err != nil {
+				return err
+			}
+		}
+		for _, allocated := range allocations {
+			if !released[[2]uint8{allocated.service, allocated.clientID}] {
+				return fmt.Errorf("service 0x%02x client 0x%02x was not released", allocated.service, allocated.clientID)
+			}
+		}
+		for i, releasedID := range releaseOrder {
+			expected := allocations[len(allocations)-1-i]
+			if releasedID != [2]uint8{expected.service, expected.clientID} {
+				return fmt.Errorf("release %d = %v, want service 0x%02x client 0x%02x", i, releasedID, expected.service, expected.clientID)
+			}
+		}
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := NewClientWithOptions(ctx, devicePath, ClientOptions{
+		UseProxy:     true,
+		SyncOnOpen:   false,
+		ReadDeadline: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, allocated := range allocations {
+		if _, err := client.AllocateClientIDWithContext(ctx, allocated.service); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := client.ReleaseAllClientIDsWithContext(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-errCh; err != nil {
 		t.Fatal(err)

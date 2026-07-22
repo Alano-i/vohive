@@ -557,3 +557,20 @@ func TestManualRebootRecoveryDelaysSkipImmediateRound(t *testing.T) {
 		t.Fatalf("manual reboot delays should span >=30s total, got %v", total)
 	}
 }
+
+func TestModemResetCommandLikelyAccepted(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{err: nil, want: true},
+		{err: errors.New("命令执行 timeout"), want: true},
+		{err: errors.New("read /dev/ttyUSB2: input/output error"), want: true},
+		{err: errors.New("modem returned ERROR"), want: false},
+	}
+	for _, tc := range tests {
+		if got := modemResetCommandLikelyAccepted(tc.err); got != tc.want {
+			t.Errorf("modemResetCommandLikelyAccepted(%v)=%v want %v", tc.err, got, tc.want)
+		}
+	}
+}

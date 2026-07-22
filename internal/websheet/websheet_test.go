@@ -106,6 +106,29 @@ func TestPostBootstrapProxiesRawUserDataBody(t *testing.T) {
 	}
 }
 
+func TestProxyRejectsOversizedHTMLBeforeWritingResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Repeat("x", maxHTMLResponseBytes+1))
+	}))
+	defer upstream.Close()
+
+	b := New(Config{AllowPrivateHosts: true})
+	s, err := b.Create(context.Background(), Request{URL: upstream.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, s.proxyURL(upstream.URL, s.accessToken), nil)
+	recorder := httptest.NewRecorder()
+	err = s.Proxy(recorder, req)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Proxy() error = %v, want oversized HTML error", err)
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("Proxy() wrote %d bytes before validating response size", recorder.Body.Len())
+	}
+}
+
 func TestRewriteHTMLKeepsProxyURLsRelativeToBrowserOrigin(t *testing.T) {
 	b := New(Config{AllowPrivateHosts: true})
 	s, err := b.Create(context.Background(), Request{URL: "https://attdashboard.wireless.att.com/softphone/primary/reseller/r017"})

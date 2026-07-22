@@ -363,8 +363,10 @@ func TestESIMSwitchFailedCallbackDoesNotRouteFatalErrorToRecovery(t *testing.T) 
 	p := NewPool(&config.Config{})
 	defer p.cancel()
 	deviceID := "dev-1"
+	worker := &Worker{ID: deviceID, generation: 1}
+	p.workers[deviceID] = worker
 	snapshot := p.beginESIMSwitch(deviceID, "")
-	_, _, onFailed, _, _ := p.newESIMSwitchCallbacks(deviceID)
+	_, _, onFailed, _, _ := p.newESIMSwitchCallbacks(worker)
 
 	onFailed(snapshot.SwitchToken, errors.New("QMI: read failed: EOF"))
 
@@ -372,6 +374,30 @@ func TestESIMSwitchFailedCallbackDoesNotRouteFatalErrorToRecovery(t *testing.T) 
 		t.Fatal("expected switching flag cleared after failed callback")
 	}
 	waitForModemRebootRecoverySwitchRestore(t, p, deviceID, false)
+}
+
+func TestStaleWorkerESIMCallbackCannotMutateReplacement(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	deviceID := "dev-1"
+	oldWorker := &Worker{ID: deviceID, generation: 1, stop: make(chan struct{})}
+	p.workers[deviceID] = oldWorker
+	onBefore, onAfter, _, _, _ := p.newESIMSwitchCallbacks(oldWorker)
+	token := onBefore(esim.SwitchOperationEnableProfile, "8901000000000000001")
+	if token == 0 {
+		t.Fatal("expected active worker callback to allocate a switch token")
+	}
+
+	replacement := &Worker{ID: deviceID, generation: 2, stop: make(chan struct{})}
+	p.workers[deviceID] = replacement
+	onAfter(token)
+
+	if p.IsESIMSwitching(deviceID) {
+		t.Fatal("stale worker callback left the replacement in switching state")
+	}
+	if replacement.SIMIdentityPhase() != "" {
+		t.Fatalf("stale callback mutated replacement identity phase: %q", replacement.SIMIdentityPhase())
+	}
 }
 
 func TestSwitchPhaseIgnoresStaleToken(t *testing.T) {
@@ -1069,11 +1095,12 @@ func TestHandleESIMSwitchAfterUsesTargetPolicyInsteadOfOldNetworkSnapshot(t *tes
 	if network.connected {
 		t.Fatal("target policy disables network; old connected snapshot must not reconnect it")
 	}
-	if w.Config.NetworkEnabled {
+	cfg := w.ConfigSnapshot()
+	if cfg.NetworkEnabled {
 		t.Fatal("target network policy was not projected")
 	}
-	if w.Config.APN != "target.apn" {
-		t.Fatalf("APN=%q want target.apn", w.Config.APN)
+	if cfg.APN != "target.apn" {
+		t.Fatalf("APN=%q want target.apn", cfg.APN)
 	}
 }
 
@@ -1102,8 +1129,8 @@ func TestHandleESIMSwitchAfterConnectsUsingTargetProfilePolicy(t *testing.T) {
 	if !network.connected {
 		t.Fatal("target policy enables network; old disabled snapshot must not keep it off")
 	}
-	if !w.Config.NetworkEnabled || w.Config.IPVersion != "v4v6" || w.Config.APN != "club.apn" {
-		t.Fatalf("target network policy not projected: %+v", w.Config)
+	if cfg := w.ConfigSnapshot(); !cfg.NetworkEnabled || cfg.IPVersion != "v4v6" || cfg.APN != "club.apn" {
+		t.Fatalf("target network policy not projected: %+v", cfg)
 	}
 }
 
@@ -1130,8 +1157,8 @@ func TestHandleESIMSwitchAfterUsesTargetAirplanePolicy(t *testing.T) {
 	if len(be.setCalls) != 1 || be.setCalls[0] != backend.ModeRFOff {
 		t.Fatalf("setCalls=%v want [%v]", be.setCalls, backend.ModeRFOff)
 	}
-	if !w.Config.AirplaneEnabled || w.Config.NetworkEnabled {
-		t.Fatalf("target airplane policy not projected: %+v", w.Config)
+	if cfg := w.ConfigSnapshot(); !cfg.AirplaneEnabled || cfg.NetworkEnabled {
+		t.Fatalf("target airplane policy not projected: %+v", cfg)
 	}
 }
 

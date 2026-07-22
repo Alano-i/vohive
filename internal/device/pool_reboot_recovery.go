@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iniwex5/vohive/internal/backend"
 	"github.com/iniwex5/vohive/internal/config"
+	"github.com/iniwex5/vohive/internal/modem"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
@@ -17,7 +19,7 @@ var qmiRecoveryControlStableInterval = 1200 * time.Millisecond
 
 func workerATProbeOK(w *Worker, timeout time.Duration) bool {
 	if w != nil {
-		if resolvedBackendMode(w.Config) == backend.BackendQMI {
+		if resolvedBackendMode(w.ConfigSnapshot()) == backend.BackendQMI {
 			return true
 		}
 		if w.Backend != nil && w.Backend.Mode() == backend.BackendQMI {
@@ -451,15 +453,8 @@ func resetWorkerForNetworkControlRecovery(worker *Worker) error {
 	if worker == nil {
 		return fmt.Errorf("worker 不存在")
 	}
-	if worker.Modem != nil && worker.Modem.HasATPort() && worker.Modem.CanExecuteAT() {
-		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", 20*time.Second)
-		if err == nil {
-			return nil
-		}
-		message := strings.ToLower(err.Error())
-		if strings.Contains(message, "timeout") || strings.Contains(message, "eof") || strings.Contains(message, "closed") || strings.Contains(message, "no such file") {
-			return nil
-		}
+	if err := resetWorkerViaAuxiliaryAT(worker, 20*time.Second); err == nil || modemResetCommandLikelyAccepted(err) {
+		return nil
 	}
 	if worker.Backend == nil {
 		return fmt.Errorf("无可用模组复位通道")
@@ -467,6 +462,65 @@ func resetWorkerForNetworkControlRecovery(worker *Worker) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return worker.Backend.Reboot(ctx)
+}
+
+// resetQMIWorkersForProcessShutdown gives converted DJI firmware a fresh QMI
+// control plane for the next process. Closing and reopening cdc-wdm alone
+// leaves these modules unable to allocate any service client IDs.
+func resetQMIWorkersForProcessShutdown(workers []*Worker) {
+	var wg sync.WaitGroup
+	for _, worker := range workers {
+		if worker == nil || !requiresQMICore(worker.ConfigSnapshot()) || worker.Modem == nil || !worker.Modem.HasATPort() {
+			continue
+		}
+		wg.Add(1)
+		go func(worker *Worker) {
+			defer wg.Done()
+			err := resetWorkerViaAuxiliaryAT(worker, 5*time.Second)
+			if err == nil || modemResetCommandLikelyAccepted(err) {
+				return
+			}
+			logger.Warn("进程关闭前复位 QMI 模组失败", "device", worker.ID, "err", err)
+		}(worker)
+	}
+	wg.Wait()
+}
+
+func resetWorkerViaAuxiliaryAT(worker *Worker, timeout time.Duration) error {
+	if worker == nil || worker.Modem == nil || !worker.Modem.HasATPort() {
+		return fmt.Errorf("辅助 AT 口不可用")
+	}
+	if worker.Modem.CanExecuteAT() {
+		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", timeout)
+		return err
+	}
+
+	serialAT, err := modem.NewSerialAT(worker.Modem.ATPort(), 115200, 8, 1, "N")
+	if err != nil {
+		return fmt.Errorf("打开辅助 AT 口失败: %w", err)
+	}
+	defer serialAT.Close()
+	response, err := serialAT.Execute("AT+CFUN=1,1", timeout)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToUpper(response), "ERROR") {
+		return fmt.Errorf("模组拒绝复位命令: %s", strings.TrimSpace(response))
+	}
+	return nil
+}
+
+func modemResetCommandLikelyAccepted(err error) bool {
+	if err == nil {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	for _, fragment := range []string{"timeout", "eof", "closed", "no such file", "no such device", "input/output error"} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Pool) scheduleWorkerRecoveryWithTransportEvent(deviceID string, reason string, event *TransportRecoveryEvent) bool {
@@ -716,7 +770,7 @@ func (p *Pool) runModemRebootRecoveryWithClaim(opts modemRebootRecoveryOptions, 
 				}
 				continue
 			}
-			if requiresQMICore(worker.Config) && !qmiWorkerControlReady(worker) {
+			if requiresQMICore(worker.ConfigSnapshot()) && !qmiWorkerControlReady(worker) {
 				logger.Info("模组重启恢复：SIM 身份已恢复，等待 QMI 控制面就绪",
 					"device", opts.deviceID,
 					"round", round+1,

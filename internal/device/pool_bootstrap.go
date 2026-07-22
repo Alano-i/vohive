@@ -438,7 +438,7 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 		return nil, err
 	}
 	w.Backend = be
-	onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase := p.newESIMSwitchCallbacks(devCfg.ID)
+	onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase := p.newESIMSwitchCallbacks(w)
 	w.EsimMgr, err = newESIMManagerForWorker(w, qmiTransport, onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase)
 	if err != nil {
 		if qmiTransportLifecycle != nil {

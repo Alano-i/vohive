@@ -30,7 +30,7 @@ type startupProvisioningEnsurer interface {
 var _ startupProvisioningEnsurer = (*qmipkg.Manager)(nil)
 
 func workerUsesAuxATUICC(w *Worker) bool {
-	return w != nil && deriveESIMTransport(w.Config) == "at" && strings.TrimSpace(w.ResolvedATPort()) != ""
+	return w != nil && deriveESIMTransport(w.ConfigSnapshot()) == "at" && strings.TrimSpace(w.ResolvedATPort()) != ""
 }
 
 func cleanupWorkerStartupSIMAuthLogicalChannels(w *Worker) {

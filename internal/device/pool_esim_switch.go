@@ -34,6 +34,7 @@ type esimSwitchContext struct {
 	IMSIBefore           string
 	TargetICCID          string
 	SwitchToken          uint64
+	WorkerGeneration     uint64
 	IdentityGeneration   uint64
 	CapturedAt           time.Time
 	Phase                esim.SwitchPhase
@@ -73,11 +74,12 @@ func (p *Pool) captureESIMSwitchContext(deviceID string, targetICCID string) esi
 	if worker == nil {
 		return ctx
 	}
+	ctx.WorkerGeneration = worker.generation
 
 	cached := worker.GetCachedDeviceStatus()
 	ctx.ICCIDBefore = strings.TrimSpace(cached.ICCID)
 	ctx.IMSIBefore = strings.TrimSpace(cached.IMSI)
-	ctx.NetworkEnabledBefore = worker.Config.NetworkEnabled
+	ctx.NetworkEnabledBefore = worker.ConfigSnapshot().NetworkEnabled
 	if nc := worker.NetworkController(); nc != nil {
 		ctx.QMIConnectedBefore = nc.IsConnected()
 	}
@@ -249,6 +251,21 @@ func (p *Pool) clearESIMSwitchIfToken(deviceID string, token uint64) {
 	delete(p.switchTokens, deviceID)
 }
 
+func (p *Pool) clearESIMSwitchForWorker(worker *Worker) {
+	if p == nil || worker == nil {
+		return
+	}
+	p.switchMu.Lock()
+	snapshot, ok := p.switchContexts[worker.ID]
+	if ok && (snapshot.WorkerGeneration == 0 || snapshot.WorkerGeneration == worker.generation) {
+		delete(p.switchContexts, worker.ID)
+		delete(p.switchingDevices, worker.ID)
+		delete(p.switchTokens, worker.ID)
+	}
+	p.switchMu.Unlock()
+	worker.setSwitchEventSource(nil)
+}
+
 func (p *Pool) applyNetworkPreferenceForSwitchSnapshot(worker *Worker, snapshot esimSwitchContext) error {
 	if worker == nil {
 		return fmt.Errorf("worker 不存在")
@@ -342,6 +359,8 @@ func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint6
 				logger.Debug("切卡前已停止上一 Profile 的驻网协调", "device", deviceID)
 			case <-time.After(3 * time.Second):
 				logger.Warn("切卡前等待旧驻网协调退出超时，继续切卡", "device", deviceID)
+			case <-p.ctx.Done():
+				return snapshot.SwitchToken
 			}
 		}
 		worker.markHealthRecoveryWindow(qmiHealthGraceAfterSwitch)
@@ -352,7 +371,7 @@ func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint6
 			worker.APDUArbiter.InvalidateSIMAuthReady("esim_switch_teardown")
 		}
 		// 创建事件源并注册到 worker，在 APDU 发送前就能接收 UIM indication。
-		if worker.Config.ESIMSwitch.EventGatedConverge {
+		if worker.ConfigSnapshot().ESIMSwitch.EventGatedConverge {
 			src := newSwitchEventSource()
 			worker.setSwitchEventSource(src)
 			logger.Debug("已为切卡创建事件源",
@@ -363,7 +382,7 @@ func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint6
 	if snapshot.VoWiFiActiveBefore {
 		logger.Info("ESIM 触发切卡，正在为该设备主动注销 VoWiFi 隧道", "device", deviceID)
 	}
-	if err := p.voWiFiHost().SwitchBegin(context.Background(), deviceID); err != nil {
+	if err := p.voWiFiHost().SwitchBegin(p.ctx, deviceID); err != nil {
 		logger.Warn("切卡前注销 VoWiFi 隧道失败", "device", deviceID, "err", err)
 	}
 	if worker := p.GetWorker(deviceID); worker != nil {
@@ -376,7 +395,7 @@ func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint6
 		}
 	}
 	if worker := p.GetWorker(deviceID); worker != nil && worker.QMICore != nil {
-		if worker.Config.ESIMSwitch.RadioCycle {
+		if worker.ConfigSnapshot().ESIMSwitch.RadioCycle {
 			releaseRadioBeforeSwitch(deviceID, worker)
 		}
 		worker.QMICore.ReleaseAPDULeasesForSwitchTeardown()
@@ -385,7 +404,7 @@ func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint6
 		if snap := worker.QMICore.GetDeviceSnapshot(); snap != nil {
 			snap.ResetIdentities(false)
 		}
-	} else if worker := p.GetWorker(deviceID); worker != nil && worker.Config.ESIMSwitch.RadioCycle {
+	} else if worker := p.GetWorker(deviceID); worker != nil && worker.ConfigSnapshot().ESIMSwitch.RadioCycle {
 		releaseRadioBeforeSwitch(deviceID, worker)
 	}
 	return snapshot.SwitchToken
@@ -586,23 +605,47 @@ func (p *Pool) waitPostSwitchCoreReady(deviceID string, worker *Worker) {
 	logger.Info("切卡后控制面已就绪，开始恢复运行态", "device", deviceID)
 }
 
-func (p *Pool) newESIMSwitchCallbacks(deviceID string) (func(esim.SwitchOperation, string) uint64, func(uint64), func(uint64, error), func(uint64, esim.SwitchPhase, error), func(uint64, esim.SwitchPhase)) {
+func (p *Pool) newESIMSwitchCallbacks(worker *Worker) (func(esim.SwitchOperation, string) uint64, func(uint64), func(uint64, error), func(uint64, esim.SwitchPhase, error), func(uint64, esim.SwitchPhase)) {
+	deviceID := ""
+	if worker != nil {
+		deviceID = worker.ID
+	}
+	current := func() bool {
+		return worker != nil && p.isCurrentWorker(worker)
+	}
 	onBefore := func(operation esim.SwitchOperation, targetICCID string) uint64 {
+		if !current() {
+			return 0
+		}
 		if operation != esim.SwitchOperationEnableProfile {
 			targetICCID = ""
 		}
 		return p.handleESIMSwitchBefore(deviceID, targetICCID)
 	}
 	onAfter := func(token uint64) {
+		if !current() {
+			p.clearESIMSwitchIfToken(deviceID, token)
+			return
+		}
 		p.handleESIMSwitchAfter(deviceID, token)
 	}
 	onFailed := func(token uint64, err error) {
+		if !current() {
+			p.clearESIMSwitchIfToken(deviceID, token)
+			return
+		}
 		p.handleESIMSwitchFailedWithError(deviceID, token, err)
 	}
 	onDegraded := func(token uint64, phase esim.SwitchPhase, err error) {
+		if !current() {
+			return
+		}
 		p.handleESIMSwitchDegradedWithError(deviceID, token, phase, err)
 	}
 	onPhase := func(token uint64, phase esim.SwitchPhase) {
+		if !current() {
+			return
+		}
 		p.markESIMSwitchPhaseIfToken(deviceID, token, phase)
 	}
 	return onBefore, onAfter, onFailed, onDegraded, onPhase
@@ -886,7 +929,7 @@ func (p *Pool) prewarmPostSwitchSIMAuth(deviceID string, worker *Worker) postSwi
 }
 
 func (p *Pool) waitPostSwitchSIMAuthReady(deviceID string, worker *Worker) error {
-	if worker == nil || worker.Backend == nil || !worker.Config.VoWiFiEnabled {
+	if worker == nil || worker.Backend == nil || !worker.ConfigSnapshot().VoWiFiEnabled {
 		return nil
 	}
 	configureWorkerAPDUArbiter(worker, nil)
@@ -898,7 +941,7 @@ func (p *Pool) waitPostSwitchSIMAuthReady(deviceID string, worker *Worker) error
 		return postSwitchSIMAuthNotReadyError(result)
 	}
 
-	waitCtx, cancel := context.WithTimeout(context.Background(), postSwitchSIMAuthReadyWaitTimeout)
+	waitCtx, cancel := context.WithTimeout(p.ctx, postSwitchSIMAuthReadyWaitTimeout)
 	defer cancel()
 	err := worker.APDUArbiter.WaitSIMAuthReady(waitCtx, func(ctx context.Context) error {
 		result := p.prewarmPostSwitchSIMAuth(deviceID, worker)
@@ -918,7 +961,7 @@ func (p *Pool) waitPostSwitchSIMAuthReady(deviceID string, worker *Worker) error
 }
 
 func (p *Pool) finishPostSwitchTargetPolicy(deviceID string, worker *Worker, restoreGateErr error, markDegraded bool) {
-	if worker.Config.VoWiFiEnabled {
+	if worker.ConfigSnapshot().VoWiFiEnabled {
 		if restoreGateErr != nil {
 			if markDegraded {
 				p.markESIMSwitchPhase(deviceID, esim.SwitchPhaseDegraded)
@@ -929,7 +972,7 @@ func (p *Pool) finishPostSwitchTargetPolicy(deviceID string, worker *Worker, res
 				"err", restoreGateErr)
 		} else {
 			p.clearDesiredVoWiFiRecoverState(deviceID)
-			if err := p.voWiFiHost().SwitchEnd(context.Background(), deviceID, true); err != nil {
+			if err := p.voWiFiHost().SwitchEnd(p.ctx, deviceID, true); err != nil {
 				p.markESIMSwitchPhase(deviceID, esim.SwitchPhaseDegraded)
 				logger.Error("切卡后恢复 VoWiFi 失败", "device", deviceID, "err", err)
 			} else {
@@ -1039,6 +1082,14 @@ func (p *Pool) handleESIMSwitchFailed(deviceID string, token uint64) {
 		logger.Warn("eSIM 切卡失败收尾：设备不存在，已清理切卡状态", "device", deviceID)
 		return
 	}
+	if snapshot.WorkerGeneration != 0 && snapshot.WorkerGeneration != worker.generation {
+		logger.Debug("忽略来自旧 Worker 的 eSIM 切卡后处理",
+			"device", deviceID,
+			"switch_token", token,
+			"switch_worker_generation", snapshot.WorkerGeneration,
+			"current_worker_generation", worker.generation)
+		return
+	}
 	logger.Warn("eSIM 切卡失败，按切卡前快照恢复 radio/data",
 		"device", deviceID,
 		"switch_token", snapshot.SwitchToken,
@@ -1143,7 +1194,7 @@ func (p *Pool) handleESIMSwitchAfter(deviceID string, token uint64) {
 
 	logger.Info("ESIM 切卡后开始按快照恢复运行态",
 		"device", deviceID,
-		"vowifi_switch", worker.Config.VoWiFiEnabled,
+		"vowifi_switch", worker.ConfigSnapshot().VoWiFiEnabled,
 		"vowifi_before", snapshot.VoWiFiActiveBefore,
 		"flight_before", snapshot.FlightModeBefore,
 		"qmi_connected_before", snapshot.QMIConnectedBefore,
@@ -1157,8 +1208,9 @@ func (p *Pool) handleESIMSwitchAfter(deviceID string, token uint64) {
 		return
 	}
 
-	if worker.Config.ESIMSwitch.RadioCycle {
-		attachTimeout := time.Duration(worker.Config.ESIMSwitch.NASAttachTimeoutMS) * time.Millisecond
+	switchCfg := worker.ConfigSnapshot().ESIMSwitch
+	if switchCfg.RadioCycle {
+		attachTimeout := time.Duration(switchCfg.NASAttachTimeoutMS) * time.Millisecond
 		p.bringRadioOnlineAfterSwitch(deviceID, worker, snapshot, attachTimeout)
 		if !p.switchTokenStillCurrent(deviceID, token, "radio_online") {
 			return
@@ -1201,7 +1253,7 @@ func (p *Pool) handleESIMSwitchAfter(deviceID string, token uint64) {
 	}
 	p.schedulePostSwitchIdentityRefreshes(deviceID, snapshot, true)
 	var restoreGateErr error
-	if worker.Config.VoWiFiEnabled {
+	if worker.ConfigSnapshot().VoWiFiEnabled {
 		simAuthReadyStart := time.Now()
 		restoreGateErr = p.waitPostSwitchSIMAuthReady(deviceID, worker)
 		logger.Info("切卡后 SIMAuth gate 阶段耗时",

@@ -84,8 +84,8 @@ type ClientOptions struct {
 // DefaultClientOptions returns the production defaults used by NewClientWithOptions.
 func DefaultClientOptions() ClientOptions {
 	return ClientOptions{
-		SyncOnOpen:            true,
-		QueryVersionOnOpen:    true,
+		SyncOnOpen:            false,
+		QueryVersionOnOpen:    false,
 		ReadDeadline:          100 * time.Millisecond,
 		DefaultRequestTimeout: 30 * time.Second,
 		TxQueueSize:           128,
@@ -137,6 +137,8 @@ const (
 	recentTransactionTTL       = 2 * time.Minute
 	maxRecentTransactions      = 256
 	lateResponseLogMinInterval = 5 * time.Second
+	openProbeTimeout           = 2 * time.Second
+	clientIDReleaseInterval    = 150 * time.Millisecond
 )
 
 // ============================================================================
@@ -162,7 +164,8 @@ type Client struct {
 	ctlTxID                uint32 // separate counter for CTL (1 byte) / CTL的独立计数器 (1字节)
 
 	// Client ID cache / 客户端ID缓存
-	clientIDs map[uint8]uint8 // service -> clientID / 服务 -> 客户端ID
+	clientIDs         map[uint8][]uint8 // service -> allocated client IDs / 服务 -> 已分配客户端ID
+	clientAllocations []clientIDAllocation
 
 	// Event handling / 事件处理
 	eventCh           chan Event
@@ -180,6 +183,11 @@ type Client struct {
 	parseErrors            atomic.Uint64
 	coalescedIndications   atomic.Uint64
 	droppedEdgeIndications atomic.Uint64
+}
+
+type clientIDAllocation struct {
+	service  uint8
+	clientID uint8
 }
 
 func normalizeClientOptions(opts ClientOptions) ClientOptions {
@@ -297,32 +305,20 @@ func NewClientWithOptions(ctx context.Context, path string, opts ClientOptions) 
 
 	// Initial sync (non-fatal, helps clear modem state) / 初始同步 (非致命，有助于清除modem状态)
 	if opts.SyncOnOpen {
-		syncCtx := ctx
-		if syncCtx == nil {
-			syncCtx = context.Background()
-		}
-		if _, hasDeadline := syncCtx.Deadline(); !hasDeadline {
-			var cancel context.CancelFunc
-			syncCtx, cancel = context.WithTimeout(syncCtx, 5*time.Second)
-			defer cancel()
-		}
-		if err := c.Sync(syncCtx); err != nil {
+		syncCtx, cancel := context.WithTimeout(contextOrBackground(ctx), openProbeTimeout)
+		err := c.Sync(syncCtx)
+		cancel()
+		if err != nil {
 			c.logf(ClientLogLevelDebug, "QMI: initial sync failed (non-fatal): %v", err)
 		}
 	}
 
 	// Query version info (non-fatal) / 查询版本信息 (非致命)
 	if opts.QueryVersionOnOpen {
-		versionCtx := ctx
-		if versionCtx == nil {
-			versionCtx = context.Background()
-		}
-		if _, hasDeadline := versionCtx.Deadline(); !hasDeadline {
-			var cancel context.CancelFunc
-			versionCtx, cancel = context.WithTimeout(versionCtx, 5*time.Second)
-			defer cancel()
-		}
-		if versions, err := c.GetServiceVersions(versionCtx); err != nil {
+		versionCtx, cancel := context.WithTimeout(contextOrBackground(ctx), openProbeTimeout)
+		versions, err := c.GetServiceVersions(versionCtx)
+		cancel()
+		if err != nil {
 			c.logf(ClientLogLevelDebug, "QMI: version info query failed (non-fatal): %v", err)
 		} else {
 			c.serviceVersions = ServiceVersionMap(versions)
@@ -332,6 +328,13 @@ func NewClientWithOptions(ctx context.Context, path string, opts ClientOptions) 
 	}
 
 	return c, nil
+}
+
+func contextOrBackground(ctx context.Context) context.Context {
+	if ctx != nil {
+		return ctx
+	}
+	return context.Background()
 }
 
 // HasService 查询 modem 是否支持指定的 QMI 服务。
@@ -375,7 +378,7 @@ func newClientWithTransport(path string, opts ClientOptions, conn qmiTransport) 
 		opts:               opts,
 		transactions:       make(map[uint32]*transactionEntry),
 		recentTransactions: make(map[uint32]recentTransaction),
-		clientIDs:          make(map[uint8]uint8),
+		clientIDs:          make(map[uint8][]uint8),
 		eventCh:            make(chan Event, opts.IndicationQueueSize),
 		indicationInCh:     make(chan Event, opts.IndicationQueueSize),
 		coalescedSignalCh:  make(chan struct{}, 1),
@@ -893,9 +896,7 @@ func (c *Client) handleClientIDRevoke(p *Packet) {
 	clientID := tlv.Value[1]
 
 	c.mu.Lock()
-	if cached, ok := c.clientIDs[service]; ok && cached == clientID {
-		delete(c.clientIDs, service)
-	}
+	c.removeClientIDLocked(service, clientID)
 	c.mu.Unlock()
 }
 
@@ -1057,7 +1058,8 @@ func (c *Client) AllocateClientIDWithContext(ctx context.Context, service uint8)
 
 			clientID := tlv.Value[1]
 			c.mu.Lock()
-			c.clientIDs[service] = clientID
+			c.clientIDs[service] = append(c.clientIDs[service], clientID)
+			c.clientAllocations = append(c.clientAllocations, clientIDAllocation{service: service, clientID: clientID})
 			c.mu.Unlock()
 
 			return clientID, nil
@@ -1093,15 +1095,86 @@ func (c *Client) ReleaseClientIDWithContext(ctx context.Context, service uint8, 
 	}
 
 	c.mu.Lock()
-	delete(c.clientIDs, service)
+	c.removeClientIDLocked(service, clientID)
 	c.mu.Unlock()
 
 	return nil
+}
+
+// ReleaseAllClientIDsWithContext releases every service client allocated by
+// this connection. It is primarily used to roll back partial initialization;
+// closing a raw QMI fd does not reliably release modem-side client IDs.
+func (c *Client) ReleaseAllClientIDsWithContext(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.mu.Lock()
+	clientIDs := make([]clientIDAllocation, len(c.clientAllocations))
+	for i := range c.clientAllocations {
+		clientIDs[i] = c.clientAllocations[len(c.clientAllocations)-1-i]
+	}
+	c.mu.Unlock()
+
+	var errs []error
+	for i, allocated := range clientIDs {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, err)
+			break
+		}
+		if i > 0 {
+			timer := time.NewTimer(clientIDReleaseInterval)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				errs = append(errs, ctx.Err())
+				return errors.Join(errs...)
+			case <-timer.C:
+			}
+		}
+		if err := c.ReleaseClientIDWithContext(ctx, allocated.service, allocated.clientID); err != nil {
+			errs = append(errs, fmt.Errorf("release service 0x%02x client 0x%02x: %w", allocated.service, allocated.clientID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (c *Client) removeClientIDLocked(service, clientID uint8) {
+	allocated := c.clientIDs[service]
+	for i, current := range allocated {
+		if current != clientID {
+			continue
+		}
+		allocated = append(allocated[:i], allocated[i+1:]...)
+		if len(allocated) == 0 {
+			delete(c.clientIDs, service)
+		} else {
+			c.clientIDs[service] = allocated
+		}
+		for allocationIndex, allocation := range c.clientAllocations {
+			if allocation.service == service && allocation.clientID == clientID {
+				c.clientAllocations = append(c.clientAllocations[:allocationIndex], c.clientAllocations[allocationIndex+1:]...)
+				break
+			}
+		}
+		return
+	}
 }
 
 // GetClientID returns the cached client ID for a service, or 0 if not allocated / GetClientID返回服务的缓存客户端ID，如果未分配则返回0
 func (c *Client) GetClientID(service uint8) uint8 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.clientIDs[service]
+	allocated := c.clientIDs[service]
+	if len(allocated) == 0 {
+		return 0
+	}
+	return allocated[len(allocated)-1]
 }

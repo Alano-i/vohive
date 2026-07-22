@@ -86,7 +86,7 @@ func workerUsesQMIHealthPolicy(worker *Worker) bool {
 	if worker == nil {
 		return false
 	}
-	return worker.QMICore != nil || requiresQMICore(worker.Config)
+	return worker.QMICore != nil || requiresQMICore(worker.ConfigSnapshot())
 }
 
 func workerQMIControlReadyForWork(worker *Worker) bool {
@@ -171,7 +171,7 @@ func (p *Pool) runHealthCheckTick() bool {
 		// 传输确认已断开（broken pipe/EOF/connection closed 等）时，重连前不可能探活成功，
 		// 没有必要再等满 3 次观察窗口——跳过等待，第一次失败就直接触发恢复。
 		transportDown := isQMI && healthErr != nil && qmiErrorIndicatesTransportDown(healthErr.Error())
-		if isQMI && strings.TrimSpace(w.Config.ControlDevice) != "" {
+		if isQMI && strings.TrimSpace(w.ConfigSnapshot().ControlDevice) != "" {
 			if failures < qmiHealthFailureThreshold && !transportDown {
 				logger.Warn("QMI 节点探活失败，进入连续失败观察窗口",
 					"device", w.ID,

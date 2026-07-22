@@ -37,14 +37,14 @@ func serveUIMUnitTestRequests(t *testing.T, c *Client, handler func(*Packet) *Pa
 					continue
 				}
 				wr.result <- nil
-				resp := handler(req)
-				if resp == nil {
-					continue
-				}
 				key := uint32(req.ServiceType)<<16 | uint32(req.TransactionID)
 				c.mu.Lock()
 				entry := c.transactions[key]
 				c.mu.Unlock()
+				resp := handler(req)
+				if resp == nil {
+					continue
+				}
 				if entry == nil {
 					t.Errorf("response channel not found for key=0x%08x", key)
 					continue

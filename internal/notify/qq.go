@@ -123,7 +123,7 @@ func (q *QQChannel) RegisterCommand(cmd string, handler CommandHandler) {
 			return nil
 		}
 
-		cmdCtx := &qqCommandContext{conversation: c}
+		cmdCtx := &qqCommandContext{ctx: ctx, conversation: c}
 		response := handler(cmdCtx, append([]string(nil), parsed.Params...))
 		if response == "" {
 			return nil
@@ -220,6 +220,7 @@ func parseAllowedRecipients(groupIDs, directIDs string) map[string]qqbot.Recipie
 }
 
 type qqCommandContext struct {
+	ctx          context.Context
 	conversation qqbot.Conversation
 }
 
@@ -227,9 +228,11 @@ func (c *qqCommandContext) Reply(text string) {
 	if c == nil || c.conversation == nil {
 		return
 	}
-	go func() {
-		if _, err := c.conversation.RespondText(context.Background(), text); err != nil {
-			logger.Warn("回复 QQ 命令消息失败", "err", err)
-		}
-	}()
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, err := c.conversation.RespondText(ctx, text); err != nil {
+		logger.Warn("回复 QQ 命令消息失败", "err", err)
+	}
 }

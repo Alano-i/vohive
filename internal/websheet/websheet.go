@@ -27,6 +27,7 @@ import (
 const (
 	defaultTTL           = 10 * time.Minute
 	defaultClientTimeout = 45 * time.Second
+	maxHTMLResponseBytes = 8 << 20
 	defaultBasePath      = "/api/websheets"
 	callbackURLToken     = "{{CALLBACK_URL}}"
 	targetQueryParam     = "target_query"
@@ -350,13 +351,14 @@ func (s *Session) Proxy(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer resp.Body.Close()
 
-	copyResponseHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
 	contentType := resp.Header.Get("Content-Type")
 	if isHTML(contentType) {
-		data, err := io.ReadAll(resp.Body)
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxHTMLResponseBytes+1))
 		if err != nil {
 			return fmt.Errorf("read websheet response: %w", err)
+		}
+		if len(data) > maxHTMLResponseBytes {
+			return fmt.Errorf("websheet HTML response exceeds %d bytes", maxHTMLResponseBytes)
 		}
 		token := strings.TrimSpace(r.URL.Query().Get("token"))
 		base := target
@@ -364,9 +366,13 @@ func (s *Session) Proxy(w http.ResponseWriter, r *http.Request) error {
 			base = resp.Request.URL
 		}
 		html := s.rewriteHTML(string(data), base, token, shouldInjectBridge(r))
+		copyResponseHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
 		_, err = io.WriteString(w, html)
 		return err
 	}
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
 	_, err = io.Copy(w, resp.Body)
 	return err
 }

@@ -9,9 +9,9 @@ import (
 	"github.com/iniwex5/vohive/pkg/logger"
 )
 
-const qmiCoreStartupInlineBudget = 60 * time.Second
-const qmiCoreRetryAttemptBudget = 60 * time.Second
-const qmiCoreRetryFailuresBeforeReset = 2
+const qmiCoreStartupInlineBudget = 30 * time.Second
+const qmiCoreRetryAttemptBudget = 20 * time.Second
+const qmiCoreRetryFailuresBeforeReset = 1
 
 type qmiCoreStartResult struct {
 	err   error

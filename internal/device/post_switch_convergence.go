@@ -245,7 +245,9 @@ func convergePostSwitch(ctx context.Context, readiness postSwitchReadinessProvid
 							// RequestCoreRecovery 是异步的：它只是向 channel 发送了一个事件。
 							// recovery goroutine 需要时间启动并调用 markCoreNotReady。
 							// 如果不等待，WaitCoreReady 会因 coreReady 仍为 true 而瞬间返回。
-							time.Sleep(1 * time.Second)
+							if err := waitContext(ctx, time.Second); err != nil {
+								return postSwitchConvergenceResult{Degraded: true, Reason: "core_recovery_canceled"}
+							}
 						}
 						// 不论是否由本侧发起恢复，均等待 core 收敛：
 						// requested=false 时 coreReady 已为 false，WaitCoreReady 直接等信号即可。
@@ -269,7 +271,9 @@ func convergePostSwitch(ctx context.Context, readiness postSwitchReadinessProvid
 						logger.Warn("切卡后 WaitCoreReady 接口不可用，硬退避 8 秒等待 Core Recovery 完成",
 							"attempt", attempt,
 							"waiter_available", false)
-						time.Sleep(8 * time.Second)
+						if err := waitContext(ctx, 8*time.Second); err != nil {
+							return postSwitchConvergenceResult{Degraded: true, Reason: "core_recovery_canceled"}
+						}
 					}
 					continue
 				}
@@ -322,8 +326,9 @@ func (p *Pool) runPostSwitchConvergence(deviceID string, token uint64, worker *W
 		return postSwitchConvergenceResult{Degraded: true, Reason: "uim_readiness_not_supported"}
 	}
 	var reloader any = worker.Backend
-	reinitWindow := effectivePostSwitchReinitWindow(worker.Config.ESIMSwitch)
-	if worker.Config.ESIMSwitch.EventGatedConverge {
+	cfg := worker.ConfigSnapshot()
+	reinitWindow := effectivePostSwitchReinitWindow(cfg.ESIMSwitch)
+	if cfg.ESIMSwitch.EventGatedConverge {
 		src := worker.currentSwitchEventSource()
 		// 如果事件源未被创建（例如 runPostSwitchConvergence 被直接调用），则在此创建。
 		if src == nil {

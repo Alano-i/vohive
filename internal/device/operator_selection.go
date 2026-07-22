@@ -9,6 +9,7 @@ import (
 
 	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 	"github.com/iniwex5/vohive/internal/backend"
+	"github.com/iniwex5/vohive/internal/config"
 )
 
 var (
@@ -227,10 +228,11 @@ func (w *Worker) GetOperatorSelection(ctx context.Context) (backend.OperatorSele
 		return backend.OperatorSelection{}, ErrBackendNotAvailable
 	}
 
-	if w.Config.OperatorSelectionMode == string(backend.OperatorSelectionManual) && w.Config.OperatorSelectionPLMN != "" {
+	cfg := w.ConfigSnapshot()
+	if cfg.OperatorSelectionMode == string(backend.OperatorSelectionManual) && cfg.OperatorSelectionPLMN != "" {
 		if sel, err := backend.NormalizeManualOperatorSelection(
-			w.Config.OperatorSelectionPLMN,
-			backend.OperatorAccessTechnology(w.Config.OperatorSelectionRAT),
+			cfg.OperatorSelectionPLMN,
+			backend.OperatorAccessTechnology(cfg.OperatorSelectionRAT),
 			nil,
 		); err == nil {
 			return sel, nil
@@ -272,15 +274,16 @@ func (w *Worker) SetOperatorSelection(ctx context.Context, req backend.SetOperat
 		return backend.OperatorSelection{}, err
 	}
 
-	// Update worker memory config
-	w.Config.OperatorSelectionMode = string(req.Mode)
-	w.Config.OperatorSelectionPLMN = req.PLMN
-	w.Config.OperatorSelectionRAT = string(req.RAT)
+	cfg := w.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.OperatorSelectionMode = string(req.Mode)
+		cfg.OperatorSelectionPLMN = req.PLMN
+		cfg.OperatorSelectionRAT = string(req.RAT)
+	})
 
 	w.RefreshRuntime(ctx, "operator_selection_change")
 
-	if w.Config.NetworkEnabled {
-		switch w.Config.DeviceBackend {
+	if cfg.NetworkEnabled {
+		switch cfg.DeviceBackend {
 		case backend.BackendQMI:
 			w.StartQMIRegistrationReconcile(ctx, "operator_selection_change")
 		case backend.BackendMBIM:

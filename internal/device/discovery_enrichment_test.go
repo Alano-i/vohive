@@ -158,8 +158,11 @@ func TestResolveDiscoveredQMIDevicePassesDefaultQMIClientOptions(t *testing.T) {
 	if imei != "867123456789012" {
 		t.Fatalf("imei=%q want 867123456789012", imei)
 	}
-	if !gotOpts.SyncOnOpen {
-		t.Fatal("SyncOnOpen=false, want default QMI client options")
+	if gotOpts.SyncOnOpen {
+		t.Fatal("SyncOnOpen=true, want default QMI client options")
+	}
+	if gotOpts.QueryVersionOnOpen {
+		t.Fatal("QueryVersionOnOpen=true, want default QMI client options")
 	}
 	if gotOpts.DefaultRequestTimeout != 30*time.Second {
 		t.Fatalf("DefaultRequestTimeout=%s, want 30s", gotOpts.DefaultRequestTimeout)

@@ -292,7 +292,8 @@ func (m *RealtimeManager) defaultReaderForDevice(deviceID string) (realtimeCount
 	if w == nil {
 		return realtimeCounterReader{}, fmt.Errorf("device %s not found", deviceID)
 	}
-	if strings.TrimSpace(w.Config.Interface) == "" {
+	cfg := w.ConfigSnapshot()
+	if strings.TrimSpace(cfg.Interface) == "" {
 		return realtimeCounterReader{}, fmt.Errorf("device %s interface not configured", deviceID)
 	}
 	if w.QMICore == nil {
@@ -301,7 +302,7 @@ func (m *RealtimeManager) defaultReaderForDevice(deviceID string) (realtimeCount
 	qmiCore := w.QMICore
 	return realtimeCounterReader{
 		DeviceID:  strings.TrimSpace(w.ID),
-		Interface: strings.TrimSpace(w.Config.Interface),
+		Interface: strings.TrimSpace(cfg.Interface),
 		ReadCounters: func(ctx context.Context) (trafficCounters, error) {
 			return readQMIWDSTrafficCounters(ctx, qmiCore)
 		},

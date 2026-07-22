@@ -31,8 +31,9 @@ func (p *Pool) EnsureESIMRuntime(deviceID, reason string) error {
 	if worker == nil {
 		return fmt.Errorf("设备未找到或未运行")
 	}
-	if config.NormalizeESIMTransport(worker.Config.ESIMTransport) != config.ESIMTransportAT &&
-		deriveESIMTransport(worker.Config) != config.ESIMTransportAT {
+	cfg := worker.ConfigSnapshot()
+	if config.NormalizeESIMTransport(cfg.ESIMTransport) != config.ESIMTransportAT &&
+		deriveESIMTransport(cfg) != config.ESIMTransportAT {
 		return nil
 	}
 	if worker.Modem != nil && worker.Modem.CanExecuteAT() && worker.EsimMgr != nil {
@@ -66,7 +67,7 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 		return fmt.Errorf("AT 控制口不可用，无法恢复 eSIM APDU 通道")
 	}
 
-	cfg := worker.Config
+	cfg := worker.ConfigSnapshot()
 	cfg.ATPort = port
 	cfg.ManagePort = port
 	replaceBackend := replaceBackendDuringATRuntimeRecovery(cfg)
@@ -120,7 +121,7 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 		}
 	}
 
-	onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase := p.newESIMSwitchCallbacks(worker.ID)
+	onBeforeSwitch, onAfterSwitch, onSwitchFailed, onSwitchDegraded, onSwitchPhase := p.newESIMSwitchCallbacks(worker)
 	runtimeWorker := &Worker{
 		ID:               worker.ID,
 		Config:           cfg,
@@ -148,10 +149,13 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 		return fmt.Errorf("设备运行时已变化，请重试")
 	}
 	oldModem := worker.Modem
+	oldESIMMgr := worker.EsimMgr
 	worker.Modem = nextModem
 	worker.Backend = nextBackend
-	worker.Config.ATPort = port
-	worker.Config.ManagePort = port
+	worker.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.ATPort = port
+		cfg.ManagePort = port
+	})
 	worker.EsimMgr = nextESIMMgr
 	p.mu.Unlock()
 	p.bindModemReadyIndications(worker)
@@ -162,12 +166,15 @@ func (p *Pool) rebuildATRuntimeForWorker(worker *Worker, reason string) error {
 	if oldModem != nil && oldModem != nextModem {
 		oldModem.Stop()
 	}
+	if oldESIMMgr != nil && oldESIMMgr != nextESIMMgr {
+		oldESIMMgr.Close()
+	}
 
 	logger.Info("已重建 AT/eSIM 运行时",
 		"device", worker.ID,
 		"reason", reason,
 		"at_port", port,
-		"data_backend", resolvedBackendMode(worker.Config),
+		"data_backend", resolvedBackendMode(worker.ConfigSnapshot()),
 		"esim_transport", config.ESIMTransportAT)
 	return nil
 }

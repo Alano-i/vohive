@@ -18,7 +18,6 @@ import (
 	"github.com/iniwex5/vohive/internal/esim"
 	mbimcore "github.com/iniwex5/vohive/internal/mbim"
 	"github.com/iniwex5/vohive/internal/modem"
-	"github.com/iniwex5/vohive/internal/proxy/server"
 	qmicore "github.com/iniwex5/vohive/internal/qmi"
 	"github.com/iniwex5/vohive/internal/vowifihost"
 	"github.com/iniwex5/vohive/pkg/logger"
@@ -94,6 +93,7 @@ func (m smsMode) String() string {
 type Worker struct {
 	ID          string
 	Config      config.DeviceConfig
+	configValue atomic.Pointer[config.DeviceConfig]
 	generation  uint64
 	Modem       *modem.Manager
 	Backend     backend.DeviceBackend // 双模后端接口（AT / QMI / Auto）
@@ -105,7 +105,6 @@ type Worker struct {
 	// ESIMQMITransport 仅在未创建共享 QMI Core、但 eSIM 仍需走 QMI transport 时使用。
 	// 复用 QMICore/QMI Core 场景下为 nil。
 	ESIMQMITransport esim.QMIAPDUTransportLifecycle
-	Proxy            *server.Server
 	Pool             *Pool
 	EsimMgr          *esim.Manager
 	stop             chan struct{}
@@ -149,7 +148,7 @@ type Worker struct {
 	smsMode smsMode
 
 	// 记录离开 VoWiFi 后是否应按配置恢复数据网络。
-	restoreNetworkAfterVoWiFi bool
+	restoreNetworkAfterVoWiFi atomic.Bool
 
 	healthMu                  sync.Mutex
 	healthConsecutiveFailures int
@@ -165,6 +164,10 @@ type Worker struct {
 type Pool struct {
 	workers    map[string]*Worker
 	rebuilding map[string]bool // 标记设备是否正在重载
+	// rescanMu serializes hardware reconciliation. Without it, a udev rescan and
+	// a health/recovery rescan can both observe the same old Worker; the slower
+	// pass may then remove the replacement created by the faster pass.
+	rescanMu sync.Mutex
 	// rebuildAttempt 记录每个设备最近一次 AddWorkerFromConfig 尝试的递增 token。
 	// 用于让启动看门狗超时强制释放 rebuilding 后，滞后完成的旧启动流程能识别自己
 	// 已被新一轮尝试取代，从而放弃注册而不是用过期路径覆盖最新状态。
@@ -1070,8 +1073,7 @@ func (p *Pool) RemoveWorker(deviceID string) error {
 	if worker == nil {
 		return fmt.Errorf("设备未找到")
 	}
-	worker.atRuntimeMu.Lock()
-	defer worker.atRuntimeMu.Unlock()
+	p.clearESIMSwitchForWorker(worker)
 	if !alreadyRebuilding {
 		defer func() {
 			p.mu.Lock()
@@ -1086,18 +1088,45 @@ func (p *Pool) RemoveWorker(deviceID string) error {
 		logger.Info("设备移除时强制关闭并清理残留的 VoWiFi 实例", "device", deviceID)
 	}
 
+	p.stopWorkerResources(worker, "remove")
+	if p.lifecycle != nil {
+		snap := p.lifecycle.GetSnapshot(deviceID)
+		if !snap.Recovering && snap.Phase != LifecyclePhaseEvicting {
+			p.lifecycle.MarkOffline(deviceID, "worker_removed")
+		}
+	}
+	return nil
+}
+
+func (p *Pool) stopWorkerResources(worker *Worker, reason string) {
+	if worker == nil {
+		return
+	}
+	worker.atRuntimeMu.Lock()
+	defer worker.atRuntimeMu.Unlock()
+
 	worker.stopOnce.Do(func() {
 		if worker.stop != nil {
 			close(worker.stop)
 		}
 	})
-
+	worker.publicIPRetryMu.Lock()
 	if worker.publicIPRetryTimer != nil {
 		worker.publicIPRetryTimer.Stop()
+		worker.publicIPRetryTimer = nil
 	}
+	worker.publicIPRetryMu.Unlock()
+	worker.operatorScanMu.Lock()
+	if worker.operatorScanCancel != nil {
+		worker.operatorScanCancel()
+		worker.operatorScanCancel = nil
+	}
+	worker.operatorScanActive = false
+	worker.operatorScanMu.Unlock()
+	worker.cancelQMIRegistration()
 
-	if worker.Proxy != nil {
-		worker.Proxy.Shutdown()
+	if worker.EsimMgr != nil {
+		worker.EsimMgr.Close()
 	}
 	if worker.ESIMQMITransport != nil {
 		_ = worker.ESIMQMITransport.Stop()
@@ -1111,18 +1140,9 @@ func (p *Pool) RemoveWorker(deviceID string) error {
 	if worker.Backend != nil {
 		_ = worker.Backend.Close()
 	}
-	if worker.Modem != nil {
-		if !worker.Modem.StopAndWait(2 * time.Second) {
-			logger.Warn("设备移除时等待 AT 管理器退出超时", "device", deviceID)
-		}
+	if worker.Modem != nil && !worker.Modem.StopAndWait(2*time.Second) {
+		logger.Warn("等待 AT 管理器退出超时", "device", worker.ID, "reason", reason)
 	}
-	if p.lifecycle != nil {
-		snap := p.lifecycle.GetSnapshot(deviceID)
-		if !snap.Recovering && snap.Phase != LifecyclePhaseEvicting {
-			p.lifecycle.MarkOffline(deviceID, "worker_removed")
-		}
-	}
-	return nil
 }
 
 // qmiWorkerBootstrapDeadline 是 AddWorkerFromConfig 单次执行的硬上限。
@@ -1242,7 +1262,7 @@ func (p *Pool) refreshIdentityAndApplyCardPolicy(worker *Worker, reason string) 
 // prewarmActiveESIMProfileName fills the lightweight profile cache used by
 // device titles, so opening the eSIM tab is not required to discover the name.
 func (p *Pool) prewarmActiveESIMProfileName(worker *Worker, reason string) {
-	if p == nil || worker == nil || worker.EsimMgr == nil || !worker.Config.ESIMEnabled {
+	if p == nil || worker == nil || worker.EsimMgr == nil || !worker.ConfigSnapshot().ESIMEnabled {
 		return
 	}
 	if err := p.EnsureESIMRuntime(worker.ID, "profile_name_prewarm"); err != nil {
@@ -1272,14 +1292,15 @@ func (p *Pool) applyNetworkPreference(worker *Worker) error {
 		return fmt.Errorf("qmi_control_not_ready")
 	}
 	nc := worker.NetworkController()
+	cfg := worker.ConfigSnapshot()
 	if nc == nil {
-		if worker.Config.NetworkEnabled {
+		if cfg.NetworkEnabled {
 			return fmt.Errorf("当前设备缺少数据面能力")
 		}
 		return nil
 	}
 
-	if worker.Config.NetworkEnabled {
+	if cfg.NetworkEnabled {
 		if worker.MBIMCore != nil {
 			if err := worker.EnsureMBIMRegistration(p.ctx, true); err != nil {
 				return err
@@ -1337,11 +1358,12 @@ func (p *Pool) resetExistingQMIDataConnectionBeforePreference(worker *Worker, re
 	ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
 	defer cancel()
 	reset, err := resetExistingQMIDataConnectionBeforePreference(ctx, worker.ID, reason, worker.QMICore)
+	networkEnabled := worker.ConfigSnapshot().NetworkEnabled
 	if err != nil {
 		logger.Warn("QMI 初始化后清理已有数据连接失败",
 			"device", worker.ID,
 			"reason", reason,
-			"network_enabled", worker.Config.NetworkEnabled,
+			"network_enabled", networkEnabled,
 			"err", err)
 		return false, err
 	}
@@ -1350,7 +1372,7 @@ func (p *Pool) resetExistingQMIDataConnectionBeforePreference(worker *Worker, re
 		logger.Info("QMI 初始化时已清理既有数据连接",
 			"device", worker.ID,
 			"reason", reason,
-			"network_enabled", worker.Config.NetworkEnabled)
+			"network_enabled", networkEnabled)
 	}
 	return reset, nil
 }
@@ -1485,7 +1507,7 @@ func qmiHealthyWorkerAttachmentUpdate(worker *Worker, live QMIDevice) (bool, con
 	if worker == nil {
 		return false, config.DeviceConfig{}
 	}
-	cfg := worker.Config
+	cfg := worker.ConfigSnapshot()
 	if !requiresQMICore(cfg) {
 		return false, cfg
 	}
@@ -1567,6 +1589,9 @@ func (p *Pool) collectRescanHardware(discovered []QMIDevice, liveWorkerIndex Wor
 }
 
 func (p *Pool) rescanAndReconnect(opts rescanReconnectOptions) error {
+	p.rescanMu.Lock()
+	defer p.rescanMu.Unlock()
+
 	discovered, err := discoverQMIDevicesFn()
 	if err != nil {
 		logger.Warn("QMI 硬件扫描失败，将继续使用兼容扫描", "err", err)
@@ -1672,6 +1697,7 @@ func (p *Pool) rescanAndReconnect(opts rescanReconnectOptions) error {
 			}
 		} else {
 			// Worker 存在且标记为健康
+			workerCfg := worker.ConfigSnapshot()
 			hwQMI := QMIDevice{
 				ControlPath:  hw.ControlPath,
 				NetInterface: hw.NetInterface,
@@ -1684,20 +1710,20 @@ func (p *Pool) rescanAndReconnect(opts rescanReconnectOptions) error {
 						logger.Debug("跳过非目标设备 QMI 路径变化重建：当前处于手动重启恢复重扫窗口",
 							"device", md.ID,
 							"target_device", opts.targetDeviceID,
-							"old_control", worker.Config.ControlDevice,
+							"old_control", workerCfg.ControlDevice,
 							"new_control", hw.ControlPath,
-							"old_interface", worker.Config.Interface,
+							"old_interface", workerCfg.Interface,
 							"new_interface", hw.NetInterface)
 						continue
 					}
 					nextCfg := applyQMIManagedAttachment(md, hwQMI)
 					logger.Info("检测到 QMI 设备路径变化，重建 Worker",
 						"device", md.ID,
-						"old_control", worker.Config.ControlDevice,
+						"old_control", workerCfg.ControlDevice,
 						"new_control", nextCfg.ControlDevice,
-						"old_interface", worker.Config.Interface,
+						"old_interface", workerCfg.Interface,
 						"new_interface", nextCfg.Interface,
-						"old_usb_path", worker.Config.USBPath,
+						"old_usb_path", workerCfg.USBPath,
 						"new_usb_path", nextCfg.USBPath)
 					p.teardownVoWiFiForReconnect(md.ID)
 					if p.lifecycle != nil {
@@ -1720,17 +1746,17 @@ func (p *Pool) rescanAndReconnect(opts rescanReconnectOptions) error {
 				}
 			}
 			currentATPort := hw.ATPort
-			if currentATPort != "" && currentATPort != worker.Config.ATPort {
+			if currentATPort != "" && currentATPort != workerCfg.ATPort {
 				if !opts.allowWorkerMutation(md.ID) {
 					logger.Debug("跳过非目标设备 AT 端口变化重建：当前处于目标设备恢复重扫窗口",
 						"device", md.ID,
 						"target_device", opts.targetDeviceID,
-						"old_port", worker.Config.ATPort,
+						"old_port", workerCfg.ATPort,
 						"new_port", currentATPort)
 					continue
 				}
 				logger.Info("检测到设备端口变化，重建 Worker",
-					"device", md.ID, "old_port", worker.Config.ATPort, "new_port", currentATPort)
+					"device", md.ID, "old_port", workerCfg.ATPort, "new_port", currentATPort)
 				p.teardownVoWiFiForReconnect(md.ID)
 				if p.lifecycle != nil {
 					p.lifecycle.BeginRecovery(md.ID, LifecyclePhaseWorkerStarting, "rescan_port_change", qmiLifecycleRecoveryTTL)
@@ -1816,8 +1842,6 @@ func (p *Pool) RebuildWorker(deviceID string) error {
 	if err := p.RemoveWorker(deviceID); err != nil {
 		logger.Warn("RebuildWorker 移除旧 Worker 失败", "device", deviceID, "err", err)
 	}
-	time.Sleep(1 * time.Second) // 等待资源释放
-
 	// 在移交控制权给 AddWorkerFromConfig 之前，主动释放占坑锁。
 	// 因为 AddWorkerFromConfig 内部也依赖这把锁来防御健康检查。
 	// 虽然有几纳秒的真空期，但这是安全的移交方式。
@@ -1927,47 +1951,50 @@ func (p *Pool) MarkLifecycleRecovery(deviceID string, phase LifecyclePhase, reas
 // SetWorkerNetworkPolicy 在锁内同步 worker 运行时的网络策略字段（供热切换显示同步），
 // 不触发任何应用动作；返回该 worker（不存在返回 nil）。ipVersion 为空时不改。
 func (p *Pool) SetWorkerNetworkPolicy(deviceID string, networkEnabled bool, ipVersion, apn string) *Worker {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
 	w := p.workers[deviceID]
+	p.mu.RUnlock()
 	if w == nil {
 		return nil
 	}
-	w.Config.NetworkEnabled = networkEnabled
-	if networkEnabled {
-		// 开网络与 VoWiFi/飞行互斥（与后端落库互斥保持一致），否则概览仍显示旧模式面板。
-		w.Config.VoWiFiEnabled = false
-		w.Config.AirplaneEnabled = false
-	}
-	if strings.TrimSpace(ipVersion) != "" {
-		w.Config.IPVersion = strings.TrimSpace(ipVersion)
-	}
-	w.Config.APN = strings.TrimSpace(apn)
+	w.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.NetworkEnabled = networkEnabled
+		if networkEnabled {
+			cfg.VoWiFiEnabled = false
+			cfg.AirplaneEnabled = false
+		}
+		if strings.TrimSpace(ipVersion) != "" {
+			cfg.IPVersion = strings.TrimSpace(ipVersion)
+		}
+		cfg.APN = strings.TrimSpace(apn)
+	})
 	return w
 }
 
 // SetWorkerCardPolicyProjection atomically mirrors the persisted per-card policy
 // into a live worker without executing network or radio operations.
 func (p *Pool) SetWorkerCardPolicyProjection(deviceID string, networkEnabled, vowifiEnabled, airplaneEnabled bool, ipVersion, apn string) *Worker {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
 	w := p.workers[deviceID]
+	p.mu.RUnlock()
 	if w == nil {
 		return nil
 	}
-	w.Config.NetworkEnabled = networkEnabled
-	w.Config.VoWiFiEnabled = vowifiEnabled
-	w.Config.AirplaneEnabled = airplaneEnabled
-	if vowifiEnabled {
-		w.Config.AirplaneEnabled = true
-		w.Config.NetworkEnabled = false
-	} else if airplaneEnabled {
-		w.Config.NetworkEnabled = false
-	}
-	if strings.TrimSpace(ipVersion) != "" {
-		w.Config.IPVersion = strings.TrimSpace(ipVersion)
-	}
-	w.Config.APN = strings.TrimSpace(apn)
+	w.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.NetworkEnabled = networkEnabled
+		cfg.VoWiFiEnabled = vowifiEnabled
+		cfg.AirplaneEnabled = airplaneEnabled
+		if vowifiEnabled {
+			cfg.AirplaneEnabled = true
+			cfg.NetworkEnabled = false
+		} else if airplaneEnabled {
+			cfg.NetworkEnabled = false
+		}
+		if strings.TrimSpace(ipVersion) != "" {
+			cfg.IPVersion = strings.TrimSpace(ipVersion)
+		}
+		cfg.APN = strings.TrimSpace(apn)
+	})
 	return w
 }
 
@@ -1976,34 +2003,38 @@ func (p *Pool) SetWorkerCardPolicyProjection(deviceID string, networkEnabled, vo
 // 关 VoWiFi 仅清 vowifi，不在此清 airplane——airplane 反映用户的纯飞行意图，
 // 由随后的 resolveAndApplyPolicy 按当前卡策略重投影回退（之前飞行回飞行，否则回在线）。
 func (p *Pool) SetWorkerVoWiFiPolicy(deviceID string, vowifiEnabled bool) *Worker {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
 	w := p.workers[deviceID]
+	p.mu.RUnlock()
 	if w == nil {
 		return nil
 	}
-	w.Config.VoWiFiEnabled = vowifiEnabled
-	if vowifiEnabled {
-		w.Config.AirplaneEnabled = true
-		w.Config.NetworkEnabled = false
-	}
+	w.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.VoWiFiEnabled = vowifiEnabled
+		if vowifiEnabled {
+			cfg.AirplaneEnabled = true
+			cfg.NetworkEnabled = false
+		}
+	})
 	return w
 }
 
 // SetWorkerAirplanePolicy 同步 worker 运行时的飞行(airplane)策略字段。
 // 开飞行 ⇒ vowifi=false、network=false（纯飞行互斥）；关飞行仅清 airplane。
 func (p *Pool) SetWorkerAirplanePolicy(deviceID string, airplaneEnabled bool) *Worker {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
 	w := p.workers[deviceID]
+	p.mu.RUnlock()
 	if w == nil {
 		return nil
 	}
-	w.Config.AirplaneEnabled = airplaneEnabled
-	if airplaneEnabled {
-		w.Config.VoWiFiEnabled = false
-		w.Config.NetworkEnabled = false
-	}
+	w.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.AirplaneEnabled = airplaneEnabled
+		if airplaneEnabled {
+			cfg.VoWiFiEnabled = false
+			cfg.NetworkEnabled = false
+		}
+	})
 	return w
 }
 
@@ -2015,9 +2046,9 @@ func (p *Pool) UpdateWorkerConfig(id string, cfg config.DeviceConfig, applyAll b
 		return false
 	}
 	if applyAll {
-		w.Config = cfg
+		w.replaceConfig(cfg)
 	} else {
-		w.Config.Name = cfg.Name
+		w.updateConfig(func(current *config.DeviceConfig) { current.Name = cfg.Name })
 	}
 	p.mu.Unlock()
 
@@ -2032,7 +2063,7 @@ func (p *Pool) MarkESIMEnabled(id string) bool {
 	if w == nil {
 		return false
 	}
-	w.Config.ESIMEnabled = true
+	w.updateConfig(func(cfg *config.DeviceConfig) { cfg.ESIMEnabled = true })
 	return true
 }
 
@@ -2047,8 +2078,9 @@ func configureWorkerAPDUArbiter(w *Worker, qmiTransport esim.QMIAPDUTransport) {
 		return
 	}
 	arbiter := w.APDUArbiter
+	cfg := w.ConfigSnapshot()
 	if arbiter == nil {
-		arbiter = apduarbiter.New(w.Config.ID, apduarbiter.Options{MaxLeaseHold: 10 * time.Minute, MaxSessions: 3, MaxQMITransports: 3})
+		arbiter = apduarbiter.New(cfg.ID, apduarbiter.Options{MaxLeaseHold: 10 * time.Minute, MaxSessions: 3, MaxQMITransports: 3})
 		w.APDUArbiter = arbiter
 	}
 	if w.Modem != nil {
@@ -2074,6 +2106,7 @@ func newESIMManagerForWorker(
 	if w == nil {
 		return nil, fmt.Errorf("worker 不能为空")
 	}
+	cfg := w.ConfigSnapshot()
 
 	var beforeWithOperation func(esim.SwitchOperation, string) uint64
 	if onBefore != nil {
@@ -2107,8 +2140,8 @@ func newESIMManagerForWorker(
 	}
 
 	mgr, err := esim.NewManager(esim.ManagerOptions{
-		DeviceID:             w.Config.ID,
-		Transport:            resolveESIMTransport(w.Config, qmiTransport != nil),
+		DeviceID:             cfg.ID,
+		Transport:            resolveESIMTransport(cfg, qmiTransport != nil),
 		Modem:                w.Modem,
 		Backend:              w.Backend,
 		QMITransport:         qmiTransport,
@@ -2119,7 +2152,7 @@ func newESIMManagerForWorker(
 		OnSwitchPhase:        phaseWithOperation,
 		APDUArbiter:          w.APDUArbiter,
 		PostSwitchMinDelay:   defaultESIMPostSwitchMinDelay,
-		SwitchUseRefreshTrue: w.Config.ESIMSwitch.UseRefreshTrue,
+		SwitchUseRefreshTrue: cfg.ESIMSwitch.UseRefreshTrue,
 	})
 	if err != nil {
 		return nil, err
@@ -2141,7 +2174,7 @@ func (w *Worker) GetStats() map[string]interface{} {
 		"public_ip":   w.GetCachedIP(),
 		"public_ipv6": w.GetCachedIPv6(),
 		"signal":      rssi,
-		"interface":   w.Config.Interface,
+		"interface":   w.ConfigSnapshot().Interface,
 	}
 	return stats
 }
@@ -2337,55 +2370,50 @@ func (p *Pool) NotifyIPChanged(id, oldIP, newIP string, duration time.Duration) 
 }
 
 func (p *Pool) Shutdown() error {
+	if p == nil {
+		return nil
+	}
+	if p.udevWatcher != nil {
+		p.udevWatcher.Stop()
+	}
 	// 先关闭所有 VoWiFi 应用实例（确保 XFRMI 接口和 SA/SP 被清理）
 	devIDs := p.voWiFiHost().InstanceIDs()
 	for _, devID := range devIDs {
 		logger.Info("正在关闭 VoWiFi", "device", devID)
-		_ = p.stopVoWiFiAppForTeardown(context.Background(), devID, "shutdown")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = p.stopVoWiFiAppForTeardown(ctx, devID, "shutdown")
+		cancel()
 	}
 
 	p.cancel()
+	p.simEventMu.Lock()
+	for id, timer := range p.simEventTimers {
+		timer.Stop()
+		delete(p.simEventTimers, id)
+	}
+	p.simEventMu.Unlock()
+
+	p.mu.Lock()
+	workers := make([]*Worker, 0, len(p.workers))
+	for id, worker := range p.workers {
+		workers = append(workers, worker)
+		delete(p.workers, id)
+	}
+	p.mu.Unlock()
+
+	resetQMIWorkersForProcessShutdown(workers)
+
 	var wg sync.WaitGroup
-	p.mu.RLock()
-	for _, w := range p.workers {
+	for _, w := range workers {
 		wg.Add(1)
 		go func(worker *Worker) {
 			defer wg.Done()
-			if worker.Proxy != nil {
-				logger.Info(fmt.Sprintf("[%s] 正在关闭代理服务器", worker.ID))
-				worker.Proxy.Shutdown()
-			}
-		}(w)
-
-		// 停止 QMI Core
-		wg.Add(1)
-		go func(worker *Worker) {
-			defer wg.Done()
-			if worker.QMICore != nil {
-				worker.QMICore.Stop()
-			}
-		}(w)
-
-		wg.Add(1)
-		go func(worker *Worker) {
-			defer wg.Done()
-			if worker.MBIMCore != nil {
-				_ = worker.MBIMCore.Close()
-			}
-		}(w)
-
-		// 停止独立 QMI UIM transport（若存在）
-		wg.Add(1)
-		go func(worker *Worker) {
-			defer wg.Done()
-			if worker.ESIMQMITransport != nil {
-				_ = worker.ESIMQMITransport.Stop()
-			}
+			p.clearESIMSwitchForWorker(worker)
+			p.stopWorkerResources(worker, "shutdown")
 		}(w)
 	}
-	p.mu.RUnlock()
 
-	// 等待 5 秒强制退出
+	// 每个 AT Manager 最多等待 2 秒，整体再留出收尾时间。
 	c := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -2396,7 +2424,7 @@ func (p *Pool) Shutdown() error {
 	case <-c:
 		logger.Info("所有工作器已正常关闭")
 		return nil
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		return fmt.Errorf("关闭超时")
 	}
 }
@@ -2415,7 +2443,7 @@ func (p *Pool) PersistRuntimeState(worker *Worker) {
 	}
 
 	// 更新 Device 表
-	if err := db.UpsertDevice(imei, worker.ID, "EC20", worker.Config.ATPort); err != nil {
+	if err := db.UpsertDevice(imei, worker.ID, "EC20", worker.ConfigSnapshot().ATPort); err != nil {
 		logger.Warn(fmt.Sprintf("[%s] 更新设备信息失败", worker.ID), "err", err)
 	}
 }

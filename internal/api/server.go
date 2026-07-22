@@ -464,9 +464,9 @@ func (s *Server) handleListDevices(c *gin.Context) {
 	list := make([]DeviceStatus, 0, len(workers))
 	for _, w := range workers {
 		status := w.GetCachedDeviceStatus() // 仓表盘列表读缓存，0 IPC
-		cfg := w.Config
+		cfg := w.ConfigSnapshot()
 		if v, ok := cfgByID[w.ID]; ok {
-			cfg = overviewDisplayConfig(w.Config, v, true)
+			cfg = overviewDisplayConfig(cfg, v, true)
 		}
 		item := DeviceStatus{
 			ID:               cfg.ID,
@@ -485,10 +485,6 @@ func (s *Server) handleListDevices(c *gin.Context) {
 			VoWiFiActive:     s.pool.IsVoWiFiActive(w.ID), // 逐个设备判断 VoWiFi 状态，支持多设备
 			VoWiFiRuntime:    s.getVoWiFiRuntimeDTO(w.ID),
 			NetworkConnected: w.NetworkConnected(),
-		}
-		// 添加格式化流量
-		if w.Proxy != nil {
-			item.Traffic = w.Proxy.GetFormattedStats()
 		}
 		list = append(list, item)
 	}
@@ -871,7 +867,7 @@ func (s *Server) startDeviceNetwork(deviceID string) (*device.Worker, device.Net
 		return worker, nil, http.StatusBadRequest, errors.New("当前设备不支持网络控制")
 	}
 	status := worker.ProjectDeviceStatus()
-	vowifiDesired := cardPolicyVoWiFiEnabled(strings.TrimSpace(status.ICCID), worker.Config.VoWiFiEnabled)
+	vowifiDesired := cardPolicyVoWiFiEnabled(strings.TrimSpace(status.ICCID), worker.ConfigSnapshot().VoWiFiEnabled)
 	if vowifiDesired || s.pool.IsVoWiFiActive(deviceID) {
 		return worker, nc, http.StatusConflict, errors.New("VoWiFi 运行中，无法启动数据网络")
 	}
@@ -1102,7 +1098,7 @@ func (s *Server) workerVoWiFiDesired(deviceID string, worker *device.Worker) boo
 	if worker == nil {
 		return false
 	}
-	fallback := worker.Config.VoWiFiEnabled
+	fallback := worker.ConfigSnapshot().VoWiFiEnabled
 	iccid := ""
 	if s != nil && s.pool != nil {
 		iccid = strings.TrimSpace(s.pool.CurrentICCIDForDevice(deviceID))
@@ -1176,10 +1172,11 @@ func (s *Server) handleStatusDetail(c *gin.Context) {
 	_ = worker.RefreshRuntime(c.Request.Context(), "status_detail")
 	_ = worker.RefreshIdentityLive(c.Request.Context(), "status_detail")
 	status := worker.ProjectDeviceStatus()
+	cfg := worker.ConfigSnapshot()
 
 	response := gin.H{
 		"id":                worker.ID,
-		"name":              worker.Config.Name,
+		"name":              cfg.Name,
 		"imei":              status.IMEI,
 		"firmware":          status.Firmware,
 		"iccid":             status.ICCID,
@@ -1209,14 +1206,10 @@ func (s *Server) handleStatusDetail(c *gin.Context) {
 		"ims_status":        status.IMSStatus,
 		"public_ip":         worker.GetCachedIP(),
 		"public_ipv6":       worker.GetCachedIPv6(),
-		"interface":         worker.Config.Interface,
-		"proxy_port":        worker.Config.ProxyPort,
+		"interface":         cfg.Interface,
+		"proxy_port":        cfg.ProxyPort,
 		"healthy":           worker.IsDeviceHealthy(),
 		"network_connected": worker.NetworkConnected(),
-	}
-
-	if worker.Proxy != nil {
-		response["traffic"] = worker.Proxy.GetFormattedStats()
 	}
 
 	vowifi := gin.H{
@@ -1274,7 +1267,7 @@ func smsWorkerESIMEnabled(worker *device.Worker, managed config.DeviceConfig, ma
 	if managedFound {
 		return managed.ESIMEnabled
 	}
-	return worker != nil && worker.Config.ESIMEnabled
+	return worker != nil && worker.ConfigSnapshot().ESIMEnabled
 }
 
 func (s *Server) handleGetSMSProfiles(c *gin.Context) {
@@ -1315,8 +1308,8 @@ func (s *Server) handleGetSMSProfiles(c *gin.Context) {
 		managedCfg, managedFound := cfgByID[worker.ID]
 		if managedFound && strings.TrimSpace(managedCfg.Name) != "" {
 			deviceName = strings.TrimSpace(managedCfg.Name)
-		} else if strings.TrimSpace(worker.Config.Name) != "" {
-			deviceName = strings.TrimSpace(worker.Config.Name)
+		} else if name := strings.TrimSpace(worker.ConfigSnapshot().Name); name != "" {
+			deviceName = name
 		}
 
 		added := false
@@ -1542,7 +1535,7 @@ func (s *Server) handleGetSMSContacts(c *gin.Context) {
 		if v, ok := cfgByID[w.ID]; ok {
 			name = v.Name
 		} else {
-			name = w.Config.Name
+			name = w.ConfigSnapshot().Name
 		}
 		if name == "" {
 			name = w.ID
@@ -1630,7 +1623,7 @@ func (s *Server) handleGetSMSThread(c *gin.Context) {
 			if v, ok := cfgByID[w.ID]; ok {
 				devName = v.Name
 			} else {
-				devName = w.Config.Name
+				devName = w.ConfigSnapshot().Name
 			}
 			if devName == "" {
 				devName = w.ID

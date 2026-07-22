@@ -186,8 +186,8 @@ func TestVoWiFiEnablePatchAcceptsDesiredStateWithoutWaitingForRuntime(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !policy.VoWiFiEnabled || !w.Config.VoWiFiEnabled {
-		t.Fatalf("VoWiFi desired state was not preserved: policy=%+v worker=%+v", policy, w.Config)
+	if cfg := w.ConfigSnapshot(); !policy.VoWiFiEnabled || !cfg.VoWiFiEnabled {
+		t.Fatalf("VoWiFi desired state was not preserved: policy=%+v worker=%+v", policy, cfg)
 	}
 }
 

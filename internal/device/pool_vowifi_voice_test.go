@@ -31,13 +31,15 @@ func TestVoWiFiTeardownPathsRestoreSMSState(t *testing.T) {
 			p := NewPool(&config.Config{})
 
 			deviceID := "wwan0"
-			p.workers[deviceID] = &Worker{ID: deviceID, restoreNetworkAfterVoWiFi: true}
+			worker := &Worker{ID: deviceID}
+			worker.setRestoreNetworkAfterVoWiFi(true)
+			p.workers[deviceID] = worker
 			p.voWiFiRuntimeStore().SetInstance(deviceID, &runtimehost.Instance{})
 
 			if ok := tc.teardown(p, deviceID); !ok {
 				t.Fatal("expected teardown to report existing app")
 			}
-			if p.workers[deviceID].restoreNetworkAfterVoWiFi {
+			if p.workers[deviceID].shouldRestoreNetworkAfterVoWiFi() {
 				t.Fatal("expected restoreNetworkAfterVoWiFi to be cleared")
 			}
 		})
@@ -48,18 +50,16 @@ func TestDisableVoWiFiRestoresSMSStateWithoutApp(t *testing.T) {
 	p := NewPool(&config.Config{})
 
 	deviceID := "wwan0"
-	p.workers[deviceID] = &Worker{
-		ID:                        deviceID,
-		restoreNetworkAfterVoWiFi: true,
-		smsMode:                   smsModeVoWiFi,
-	}
+	worker := &Worker{ID: deviceID, smsMode: smsModeVoWiFi}
+	worker.setRestoreNetworkAfterVoWiFi(true)
+	p.workers[deviceID] = worker
 
 	if err := p.DisableVoWiFi(deviceID); err != nil {
 		t.Fatalf("DisableVoWiFi() error = %v", err)
 	}
 
-	worker := p.workers[deviceID]
-	if worker.restoreNetworkAfterVoWiFi {
+	worker = p.workers[deviceID]
+	if worker.shouldRestoreNetworkAfterVoWiFi() {
 		t.Fatal("expected restoreNetworkAfterVoWiFi to be cleared")
 	}
 	if worker.smsMode != smsModeAT {

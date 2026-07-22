@@ -57,16 +57,18 @@ func (p *Pool) restoreNetworkAfterVoWiFiStartupFailure(traceID, deviceID string,
 		return
 	}
 	defer func() {
-		w.restoreNetworkAfterVoWiFi = false
+		w.setRestoreNetworkAfterVoWiFi(false)
 	}()
 	nc := w.NetworkController()
-	if nc == nil || !w.restoreNetworkAfterVoWiFi || w.Backend == nil {
+	if nc == nil || !w.shouldRestoreNetworkAfterVoWiFi() || w.Backend == nil {
 		return
 	}
 	if restoreErr := w.Backend.SetOperatingMode(p.ctx, backend.ModeOnline); restoreErr != nil {
 		logger.Warn("恢复射频失败", "trace_id", traceID, "device", deviceID, "err", restoreErr)
 	}
-	time.Sleep(500 * time.Millisecond)
+	if err := waitContext(p.ctx, 500*time.Millisecond); err != nil {
+		return
+	}
 	if connectErr := nc.Connect(); connectErr != nil {
 		logger.Warn("恢复数据连接失败", "trace_id", traceID, "device", deviceID, "err", connectErr)
 	}

@@ -9,10 +9,11 @@ func (w *Worker) ResolvedATPort() string {
 	if w == nil {
 		return ""
 	}
-	if v := strings.TrimSpace(w.Config.ATPort); v != "" {
+	cfg := w.ConfigSnapshot()
+	if v := strings.TrimSpace(cfg.ATPort); v != "" {
 		return v
 	}
-	if v := strings.TrimSpace(w.Config.ManagePort); v != "" {
+	if v := strings.TrimSpace(cfg.ManagePort); v != "" {
 		return v
 	}
 	if w.Modem != nil {

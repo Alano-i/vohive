@@ -74,8 +74,8 @@ func TestFlightModeControlFailureKeepsSavedIntentAndStartsRecovery(t *testing.T)
 	if !policy.AirplaneEnabled || policy.NetworkEnabled || policy.VoWiFiEnabled {
 		t.Fatalf("flight intent was not preserved: %+v", policy)
 	}
-	if !worker.Config.AirplaneEnabled || worker.Config.NetworkEnabled || worker.Config.VoWiFiEnabled {
-		t.Fatalf("worker projection was not preserved: %+v", worker.Config)
+	if cfg := worker.ConfigSnapshot(); !cfg.AirplaneEnabled || cfg.NetworkEnabled || cfg.VoWiFiEnabled {
+		t.Fatalf("worker projection was not preserved: %+v", cfg)
 	}
 }
 

@@ -153,7 +153,7 @@ func BuildWorkerDiscoveryIndex(workers []*Worker, includeRuntimeStatus bool) Wor
 		if worker == nil {
 			continue
 		}
-		cfg := worker.Config
+		cfg := worker.ConfigSnapshot()
 		info := WorkerDiscoveryInfo{
 			ID:          worker.ID,
 			ControlPath: strings.TrimSpace(cfg.ControlDevice),

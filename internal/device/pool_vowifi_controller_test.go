@@ -533,8 +533,8 @@ func TestDisableVoWiFiAppliesCurrentCardPolicyAfterRuntimeStops(t *testing.T) {
 	if len(backendStub.setOpModeCalls) != 1 || backendStub.setOpModeCalls[0] != backend.ModeOnline {
 		t.Fatalf("DisableVoWiFi 后应按当前卡策略退出飞行模式: %+v", backendStub.setOpModeCalls)
 	}
-	if w.Config.VoWiFiEnabled || w.Config.AirplaneEnabled {
-		t.Fatalf("worker config 未投影当前卡策略: %+v", w.Config)
+	if cfg := w.ConfigSnapshot(); cfg.VoWiFiEnabled || cfg.AirplaneEnabled {
+		t.Fatalf("worker config 未投影当前卡策略: %+v", cfg)
 	}
 }
 
@@ -573,8 +573,8 @@ func TestDisableVoWiFiWithAirplaneIntentStaysInAirplane(t *testing.T) {
 			t.Fatalf("保留飞行意图时不应切回 Online: %+v", backendStub.setOpModeCalls)
 		}
 	}
-	if w.Config.VoWiFiEnabled || !w.Config.AirplaneEnabled {
-		t.Fatalf("关 VoWiFi 后应回退到飞行: %+v", w.Config)
+	if cfg := w.ConfigSnapshot(); cfg.VoWiFiEnabled || !cfg.AirplaneEnabled {
+		t.Fatalf("关 VoWiFi 后应回退到飞行: %+v", cfg)
 	}
 }
 

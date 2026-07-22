@@ -35,6 +35,31 @@ const (
 	StateStopping                  // Stopping / 正在停止
 )
 
+// Converted DJI modules are unreliable when multiple control ports process
+// QMI CTL lifecycle traffic concurrently. Serialize only open/allocation and
+// release/close phases; normal service requests remain fully concurrent.
+var qmiControlPlaneGate = func() chan struct{} {
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return gate
+}()
+
+func acquireQMIControlPlane(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-qmiControlPlaneGate:
+		return nil
+	}
+}
+
+func releaseQMIControlPlane() {
+	qmiControlPlaneGate <- struct{}{}
+}
+
 func (s State) String() string {
 	switch s {
 	case StateDisconnected:
@@ -2765,15 +2790,6 @@ func (m *Manager) cleanup() {
 	m.mu.Lock()
 	wds := m.wds
 	wdsV6 := m.wdsV6
-	nas := m.nas
-	dms := m.dms
-	uim := m.uim
-	wda := m.wda
-	wms := m.wms
-	ims := m.ims
-	imsa := m.imsa
-	imsp := m.imsp
-	voice := m.voice
 	client := m.client
 	handleV4 := m.handleV4
 	handleV6 := m.handleV6
@@ -2867,43 +2883,11 @@ func (m *Manager) cleanup() {
 
 	runCleanupTasks(cleanupCtx, m.log, cleanupTasks)
 
-	// Release clients / 释放客户端
-	if wds != nil {
-		wds.Close()
-	}
-	if wdsV6 != nil {
-		wdsV6.Close()
-	}
-	if nas != nil {
-		nas.Close()
-	}
-	if dms != nil {
-		dms.Close()
-	}
-	if uim != nil {
-		uim.Close()
-	}
-	if wda != nil {
-		wda.Close()
-	}
-	if wms != nil {
-		wms.Close()
-	}
-	if ims != nil {
-		ims.Close()
-	}
-	if imsa != nil {
-		imsa.Close()
-	}
-	if imsp != nil {
-		imsp.Close()
-	}
-	if voice != nil {
-		voice.Close()
-	}
-
 	if client != nil {
-		client.Close()
+		// The converted DJI firmware cannot reliably open a second QMI session,
+		// even after every CID is released successfully. The owning application
+		// resets the modem over its independent AT port before normal shutdown.
+		_ = client.Close()
 	}
 }
 
@@ -3075,29 +3059,30 @@ func (m *Manager) openClientAndAllocateServices(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		initCtx, cancel := contextWithMaxTimeout(ctx, m.cfg.Timeouts.Init)
-		client, err := qmi.NewClientWithOptions(initCtx, m.cfg.Device.ControlPath, m.cfg.ClientOptions)
-		if err != nil {
-			cancel()
-			lastErr = fmt.Errorf("failed to open QMI device: %w", err)
-		} else {
-			m.mu.Lock()
-			m.client = client
-			m.mu.Unlock()
-
-			err = m.allocateServices(initCtx)
-			cancel()
-			if err == nil {
-				return nil
-			}
+		if err := acquireQMIControlPlane(ctx); err != nil {
 			lastErr = err
+		} else {
+			initCtx, cancel := contextWithMaxTimeout(ctx, m.cfg.Timeouts.Init)
+			client, err := qmi.NewClientWithOptions(initCtx, m.cfg.Device.ControlPath, m.cfg.ClientOptions)
+			if err != nil {
+				lastErr = fmt.Errorf("failed to open QMI device: %w", err)
+			} else {
+				m.mu.Lock()
+				m.client = client
+				m.mu.Unlock()
 
-			client.Close()
-			m.mu.Lock()
-			if m.client == client {
-				m.client = nil
+				err = m.allocateServices(initCtx)
+				if err == nil {
+					cancel()
+					releaseQMIControlPlane()
+					return nil
+				}
+				lastErr = err
+				cancel()
+				m.rollbackPartialInitialization(client)
 			}
-			m.mu.Unlock()
+			cancel()
+			releaseQMIControlPlane()
 		}
 
 		var timeoutErr *qmi.TimeoutError
@@ -3123,6 +3108,37 @@ func (m *Manager) openClientAndAllocateServices(ctx context.Context) error {
 	}
 
 	return lastErr
+}
+
+func (m *Manager) rollbackPartialInitialization(client *qmi.Client) {
+	if client == nil {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := client.ReleaseAllClientIDsWithContext(releaseCtx); err != nil {
+		m.log.WithError(err).Warn("Failed to release QMI client IDs after partial initialization")
+	}
+	cancel()
+	_ = client.Close()
+
+	m.mu.Lock()
+	if m.client == client {
+		m.client = nil
+	}
+	// All service objects created during this attempt reference the closed
+	// client. Keeping any of them lets a later retry expose stale services.
+	m.wds = nil
+	m.wdsV6 = nil
+	m.nas = nil
+	m.dms = nil
+	m.uim = nil
+	m.wda = nil
+	m.wms = nil
+	m.ims = nil
+	m.imsa = nil
+	m.imsp = nil
+	m.voice = nil
+	m.mu.Unlock()
 }
 
 func (m *Manager) doRecoverFromModemReset() bool {

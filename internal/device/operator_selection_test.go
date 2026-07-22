@@ -124,8 +124,9 @@ func TestWorker_SetOperatorSelection_Success(t *testing.T) {
 		t.Fatalf("expected setCalled=true")
 	}
 
-	if w.Config.OperatorSelectionMode != string(req.Mode) || w.Config.OperatorSelectionPLMN != req.PLMN || w.Config.OperatorSelectionRAT != string(req.RAT) {
-		t.Fatalf("config not updated properly: %+v", w.Config)
+	cfg := w.ConfigSnapshot()
+	if cfg.OperatorSelectionMode != string(req.Mode) || cfg.OperatorSelectionPLMN != req.PLMN || cfg.OperatorSelectionRAT != string(req.RAT) {
+		t.Fatalf("config not updated properly: %+v", cfg)
 	}
 }
 

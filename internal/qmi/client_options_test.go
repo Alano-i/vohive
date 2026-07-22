@@ -31,8 +31,11 @@ func TestClientOptionsFromDeviceConfigKeepsRuntimeDefaultsAndProxy(t *testing.T)
 	if opts.ProxyExecutable != proxyExecutable {
 		t.Fatalf("ProxyExecutable=%q, want %s", opts.ProxyExecutable, proxyExecutable)
 	}
-	if !opts.SyncOnOpen {
-		t.Fatal("SyncOnOpen=false, want true")
+	if opts.SyncOnOpen {
+		t.Fatal("SyncOnOpen=true, want false for converted DJI firmware")
+	}
+	if opts.QueryVersionOnOpen {
+		t.Fatal("QueryVersionOnOpen=true, want false for converted DJI firmware")
 	}
 	if opts.ReadDeadline != 100*time.Millisecond {
 		t.Fatalf("ReadDeadline=%s, want 100ms", opts.ReadDeadline)
