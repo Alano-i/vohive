@@ -36,6 +36,77 @@ func workerATProbeOK(w *Worker, timeout time.Duration) bool {
 	return err == nil
 }
 
+// SendWorkerReboot submits a full modem reset through the active backend, with
+// AT+CFUN fallback when the QMI control plane is unavailable.
+func SendWorkerReboot(ctx context.Context, worker *Worker, forceATFirst bool) error {
+	if worker == nil {
+		return fmt.Errorf("设备未找到")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	useATFirst := forceATFirst || worker.Backend == nil || worker.Backend.Mode() != backend.BackendQMI
+	tryAT := func() bool {
+		if worker.Modem == nil || !worker.Modem.HasATPort() || !worker.Modem.CanExecuteAT() {
+			return false
+		}
+		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", 20*time.Second)
+		if err == nil {
+			return true
+		}
+		message := strings.ToLower(err.Error())
+		return strings.Contains(message, "timeout") || strings.Contains(message, "eof") ||
+			strings.Contains(message, "closed") || strings.Contains(message, "no such file")
+	}
+
+	rebootSent := false
+	if useATFirst {
+		rebootSent = tryAT()
+	}
+	var backendErr error
+	if !rebootSent && worker.Backend != nil {
+		if err := worker.Backend.Reboot(ctx); err != nil {
+			backendErr = err
+		} else {
+			rebootSent = true
+		}
+	}
+	if !rebootSent && !useATFirst {
+		rebootSent = tryAT()
+	}
+	if rebootSent {
+		return nil
+	}
+	if backendErr != nil {
+		return fmt.Errorf("重启指令失败: %w", backendErr)
+	}
+	return fmt.Errorf("无法发送重启指令，无可用通道")
+}
+
+func (p *Pool) RebootWorkerAndRecover(ctx context.Context, worker *Worker, reason string) error {
+	if p == nil || worker == nil || !p.isCurrentWorker(worker) {
+		return fmt.Errorf("worker_unavailable")
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "modem_reboot"
+	}
+	// Claim recovery before sending the reset. Otherwise a udev event or health
+	// check can win the race and a second caller may reset the same modem again.
+	if !p.beginModemRebootRecovery(worker.ID) {
+		return fmt.Errorf("modem_reboot_recovery_in_progress")
+	}
+	forceATFirst := worker.QMICore != nil && !worker.QMICore.IsControlReady()
+	if err := SendWorkerReboot(ctx, worker, forceATFirst); err != nil {
+		p.finishModemRebootRecovery(worker.ID)
+		return err
+	}
+	p.MarkLifecycleRecovery(worker.ID, LifecyclePhaseRebooting, reason, 3*time.Minute)
+	opts := defaultModemRebootRecoveryOptions(worker.ID, reason)
+	opts.delays = commandedRebootRecoveryDelays(reason)
+	go p.runModemRebootRecoveryWithClaim(opts, true)
+	return nil
+}
+
 func (p *Pool) refreshModemRebootRecoveredIdentity(w *Worker, reason string) error {
 	if w == nil {
 		return fmt.Errorf("worker_nil")
@@ -108,6 +179,15 @@ func defaultModemRebootRecoveryOptions(deviceID string, reason string) modemRebo
 // 首轮等待模组真正复位后再扫描，避免命中尚未掉线的旧模组。
 func manualRebootRecoveryDelays() []time.Duration {
 	return []time.Duration{2 * time.Second, 3 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second, 30 * time.Second}
+}
+
+func commandedRebootRecoveryDelays(reason string) []time.Duration {
+	switch strings.TrimSpace(reason) {
+	case "manual_reboot", "network_enable_qmi_recovery", "esim_switch":
+		return manualRebootRecoveryDelays()
+	default:
+		return defaultModemRebootRecoveryOptions("", "").delays
+	}
 }
 
 func (p *Pool) beginModemRebootRecovery(deviceID string) bool {
@@ -374,10 +454,12 @@ func modemRebootRecoveryShouldRebuildAfterTransportDown(worker *Worker, err erro
 
 func (p *Pool) ScheduleModemRebootRecovery(deviceID string, reason string) {
 	opts := defaultModemRebootRecoveryOptions(deviceID, reason)
-	if normalized := strings.TrimSpace(reason); normalized == "manual_reboot" || normalized == "network_enable_qmi_recovery" {
-		opts.delays = manualRebootRecoveryDelays()
+	opts.delays = commandedRebootRecoveryDelays(reason)
+	if !p.beginModemRebootRecovery(deviceID) {
+		logger.Debug("模组重启恢复已在运行，跳过重复调度", "device", deviceID, "reason", reason)
+		return
 	}
-	go p.runModemRebootRecovery(opts)
+	go p.runModemRebootRecoveryWithClaim(opts, true)
 }
 
 // ScheduleNetworkControlRecovery resets the modem through the auxiliary AT

@@ -148,6 +148,7 @@ func (p *Pool) runHealthCheckTick() bool {
 				Reason:    "control_health_check_ok",
 			})
 			w.resetHealthFailureStreak()
+			w.ReconcileIdleQMIRegistration(p.ctx, "health_check_unregistered")
 			continue
 		}
 

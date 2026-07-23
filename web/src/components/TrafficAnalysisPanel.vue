@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watchEffect } from 'vue'
 import ErrorState from './ErrorState.vue'
 import RefreshButton from './RefreshButton.vue'
 import type { AppError } from '../types/domain'
@@ -62,7 +62,33 @@ const emit = defineEmits<{
 const VChartComp = shallowRef<unknown>(null)
 const chartLoadError = ref<string | null>(null)
 const chartLoading = ref(false)
+const themeRevision = ref(0)
 let chartInitPromise: Promise<void> | null = null
+let themeClassObserver: MutationObserver | null = null
+
+const chartThemeColors = computed(() => {
+  void themeRevision.value
+  if (typeof window === 'undefined') {
+    return { primary: '#101828', secondary: '#667085' }
+  }
+  const styles = window.getComputedStyle(document.documentElement)
+  return {
+    primary: styles.getPropertyValue('--vh-text').trim() || '#101828',
+    secondary: styles.getPropertyValue('--vh-text-muted').trim() || '#667085'
+  }
+})
+
+onMounted(() => {
+  themeClassObserver = new MutationObserver(() => {
+    themeRevision.value += 1
+  })
+  themeClassObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+})
+
+onUnmounted(() => {
+  themeClassObserver?.disconnect()
+  themeClassObserver = null
+})
 
 function formatChartLoadError(err: unknown) {
   if (err instanceof Error) return `${err.name}: ${err.message}`
@@ -270,12 +296,14 @@ const chartOption = computed(() => {
   const { timestamps, devices, series, totalBytesByTs } = snapshot
   const maxBytes = Math.max(0, ...totalBytesByTs)
   const unit = pickUnit(maxBytes)
+  const { primary: primaryTextColor, secondary: secondaryTextColor } = chartThemeColors.value
 
   if (props.mode === 'device') {
     return {
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
+        textStyle: { color: primaryTextColor },
+        axisPointer: { type: 'cross', label: { color: primaryTextColor, backgroundColor: '#6a7985' } },
         formatter: (params: unknown) => {
           const list: TooltipParam[] = Array.isArray(params)
             ? params.filter((item): item is TooltipParam => !!item && typeof item === 'object')
@@ -304,6 +332,7 @@ const chartOption = computed(() => {
           type: 'category',
           boundaryGap: false,
           data: timestamps,
+          axisLabel: { color: secondaryTextColor },
           axisLine: { lineStyle: { color: '#4b5563' } }
         }
       ],
@@ -311,6 +340,8 @@ const chartOption = computed(() => {
         {
           type: 'value',
           name: `流量 (${unit.label})`,
+          nameTextStyle: { color: secondaryTextColor },
+          axisLabel: { color: secondaryTextColor },
           splitLine: { lineStyle: { color: '#374151', type: 'dashed', opacity: 0.3 } },
           axisLine: { lineStyle: { color: '#4b5563' } }
         }
@@ -361,7 +392,8 @@ const chartOption = computed(() => {
   return {
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } },
+      textStyle: { color: primaryTextColor },
+      axisPointer: { type: 'cross', label: { color: primaryTextColor, backgroundColor: '#6a7985' } },
       formatter: (params: unknown) => {
         const list: TooltipParam[] = Array.isArray(params)
           ? params.filter((item): item is TooltipParam => !!item && typeof item === 'object')
@@ -404,7 +436,7 @@ const chartOption = computed(() => {
     legend: {
       type: 'scroll',
       data: ['总流量', ...devices],
-      textStyle: { color: '#9ca3af' },
+      textStyle: { color: secondaryTextColor },
       top: 0,
       left: 10,
       right: 10,
@@ -422,6 +454,7 @@ const chartOption = computed(() => {
         type: 'category',
         boundaryGap: false,
         data: timestamps,
+        axisLabel: { color: secondaryTextColor },
         axisLine: { lineStyle: { color: '#4b5563' } }
       }
     ],
@@ -429,6 +462,8 @@ const chartOption = computed(() => {
       {
         type: 'value',
         name: `流量 (${unit.label})`,
+        nameTextStyle: { color: secondaryTextColor },
+        axisLabel: { color: secondaryTextColor },
         splitLine: { lineStyle: { color: '#374151', type: 'dashed', opacity: 0.3 } },
         axisLine: { lineStyle: { color: '#4b5563' } }
       }
@@ -564,10 +599,14 @@ function handleRangeChange(value: string | number | boolean | undefined) {
 <style scoped>
 .device-traffic-panel {
   border: 0 !important;
-  background: rgba(0, 0, 0, 0.2) !important;
+  background: var(--ui-surface-muted) !important;
   box-shadow: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+:global(html.dark .device-traffic-panel) {
+  background: rgba(0, 0, 0, 0.2) !important;
 }
 
 :global(html.dark .traffic-analysis-surface) {

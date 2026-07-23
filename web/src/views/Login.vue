@@ -192,7 +192,7 @@ async function handleLogin() {
   justify-content: space-between;
   flex-direction: column;
   padding: 46px;
-  color: #edf4ff;
+  color: var(--vh-dark-text-primary);
   background:
     radial-gradient(circle at 12% 0%, rgba(122, 135, 255, 0.26), transparent 25rem),
     radial-gradient(circle at 92% 96%, rgba(44, 202, 233, 0.12), transparent 22rem),
@@ -268,7 +268,7 @@ async function handleLogin() {
 }
 
 .intro-brand-name {
-  color: #f3f6ff;
+  color: var(--vh-dark-text-primary);
   font-size: 20px;
   font-weight: 760;
   line-height: 1.05;
@@ -277,7 +277,7 @@ async function handleLogin() {
 
 .intro-brand-caption {
   margin-top: 5px;
-  color: #7588a7;
+  color: var(--vh-dark-text-secondary);
   font-size: 8px;
   font-weight: 750;
   letter-spacing: 0.2em;
@@ -292,7 +292,7 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   gap: 9px;
-  color: #8595b1;
+  color: var(--vh-dark-text-secondary);
   font-size: 9px;
   font-weight: 720;
   letter-spacing: 0.17em;
@@ -306,7 +306,7 @@ async function handleLogin() {
 
 .intro-copy h1 {
   margin: 22px 0 18px;
-  color: #f5f7ff;
+  color: var(--vh-dark-text-primary);
   font-size: clamp(37px, 4vw, 52px);
   font-weight: 700;
   line-height: 1.16;
@@ -324,7 +324,7 @@ async function handleLogin() {
 .intro-copy p {
   max-width: 450px;
   margin: 0;
-  color: #8fa0ba;
+  color: var(--vh-dark-text-secondary);
   font-size: 13px;
   line-height: 1.85;
 }
@@ -341,7 +341,7 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: #7587a3;
+  color: var(--vh-dark-text-secondary);
   font-size: 8px;
   font-weight: 720;
   letter-spacing: 0.12em;
@@ -385,8 +385,8 @@ async function handleLogin() {
 
 .intro-metrics div:first-child { padding-left: 0; }
 .intro-metrics div:last-child { border-right: 0; }
-.intro-metrics strong { display: block; color: #e9effb; font-size: 12px; letter-spacing: 0.02em; }
-.intro-metrics span { display: block; margin-top: 4px; color: #687b99; font-size: 8px; }
+.intro-metrics strong { display: block; color: var(--vh-dark-text-primary); font-size: 12px; letter-spacing: 0.02em; }
+.intro-metrics span { display: block; margin-top: 4px; color: var(--vh-dark-text-secondary); font-size: 8px; }
 
 .signal-line {
   display: grid;

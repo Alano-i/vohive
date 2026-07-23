@@ -2,7 +2,6 @@
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { Expand, Fold } from '@element-plus/icons-vue'
 import LoadingScreen from '../components/LoadingScreen.vue'
 import ErrorBoundary from '../components/ErrorBoundary.vue'
 import SwitchDark from '../components/SwitchDark.vue'
@@ -29,19 +28,18 @@ const emit = defineEmits(['toggle-theme'])
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
-const collapsed = ref(false)
 const isMobile = ref(false)
 const debugOpen = ref(false)
 const DebugPanel = defineAsyncComponent(() => import('../components/DebugPanel.vue'))
 
 const menuItems = [
-  { index: '/', label: '仪表盘', shortLabel: '仪表', caption: 'Overview', icon: Board24Regular },
-  { index: '/devices', label: '设备管理', shortLabel: '设备', caption: 'Devices', icon: Phone24Regular },
-  { index: '/proxy', label: '代理管理', shortLabel: '代理', caption: 'Network', icon: Globe24Regular },
-  { index: '/sms', label: '短信中心', shortLabel: '短信', caption: 'Messages', icon: Mail24Regular },
-  { index: '/notifications', label: '通知中心', shortLabel: '通知', caption: 'Notify', icon: Alert24Regular },
-  { index: '/logs', label: '实时日志', shortLabel: '日志', caption: 'Telemetry', icon: DocumentText24Regular },
-  { index: '/settings', label: '系统设置', shortLabel: '设置', caption: 'System', icon: Settings24Regular }
+  { index: '/', label: '仪表盘', shortLabel: '仪表', icon: Board24Regular },
+  { index: '/devices', label: '设备管理', shortLabel: '设备', icon: Phone24Regular },
+  { index: '/proxy', label: '代理管理', shortLabel: '代理', icon: Globe24Regular },
+  { index: '/sms', label: '短信中心', shortLabel: '短信', icon: Mail24Regular },
+  { index: '/notifications', label: '通知中心', shortLabel: '通知', icon: Alert24Regular },
+  { index: '/logs', label: '实时日志', shortLabel: '日志', icon: DocumentText24Regular },
+  { index: '/settings', label: '系统设置', shortLabel: '设置', icon: Settings24Regular }
 ]
 
 const activePath = computed(() => route.path)
@@ -102,27 +100,23 @@ watch(
   <el-container v-if="auth.isAuthenticated && route.name !== 'Login'" class="app-shell h-full">
     <el-aside
       v-if="!isMobile"
-      :width="collapsed ? '76px' : '252px'"
-      class="desktop-sidebar relative h-full transition-[width] duration-300"
+      width="252px"
+      class="desktop-sidebar relative h-full"
     >
       <div class="sidebar-ambient" />
 
-      <div class="sidebar-brand" :class="collapsed ? 'justify-center px-0' : ''">
+      <div class="sidebar-brand">
         <div class="brand-mark" aria-hidden="true">
           <span class="brand-glyph">V</span>
           <span class="brand-signal" />
         </div>
-        <div v-if="!collapsed" class="min-w-0">
+        <div class="min-w-0">
           <div class="brand-name">VoHive</div>
           <div class="brand-caption">CONTROL CENTER</div>
         </div>
       </div>
 
-      <div v-if="!collapsed" class="sidebar-section-label">Workspace</div>
-
       <el-menu
-        :collapse="collapsed"
-        :collapse-transition="false"
         :default-active="activePath"
         class="sidebar-menu !border-0 !bg-transparent"
         router
@@ -132,17 +126,16 @@ watch(
           <template #title>
             <span class="sidebar-menu-copy">
               <span class="sidebar-menu-label">{{ item.label }}</span>
-              <span class="sidebar-menu-caption">{{ item.caption }}</span>
             </span>
           </template>
         </el-menu-item>
       </el-menu>
 
-      <div class="sidebar-footer" :class="collapsed ? 'px-3' : 'px-4'">
-        <div v-if="!collapsed" class="system-card">
+      <div class="sidebar-footer px-4">
+        <div class="system-card">
           <div class="system-card-topline">
             <span class="system-live-dot"><i /></span>
-            <span>系统在线</span>
+            <span class="system-status-label">系统在线</span>
             <span class="system-latency">LIVE</span>
           </div>
           <div class="system-user-row">
@@ -156,25 +149,12 @@ watch(
             </button>
           </div>
         </div>
-        <button v-else type="button" class="rail-logout" aria-label="退出登录" @click="handleLogout">
-          <SignOut24Regular />
-        </button>
       </div>
     </el-aside>
 
     <el-container class="workspace-shell h-full min-w-0">
       <el-header class="topbar">
         <div class="topbar-left">
-          <button
-            v-if="!isMobile"
-            type="button"
-            class="collapse-button"
-            :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
-            @click="collapsed = !collapsed"
-          >
-            <el-icon><Expand v-if="collapsed" /><Fold v-else /></el-icon>
-          </button>
-
           <div v-if="isMobile" class="mobile-brand-lockup">
             <div class="brand-mark brand-mark-small" aria-hidden="true">
               <span class="brand-glyph">V</span>
@@ -237,7 +217,7 @@ watch(
   background:
     linear-gradient(180deg, rgba(17, 26, 44, 0.98), rgba(8, 14, 26, 0.985)),
     #0a1120;
-  color: #edf4ff;
+  color: var(--vh-text);
   box-shadow: 12px 0 40px rgba(13, 25, 45, 0.08);
 }
 
@@ -286,6 +266,7 @@ watch(
 
 .brand-glyph {
   position: relative;
+  color: #ffffff;
   font-size: 17px;
   font-weight: 850;
   letter-spacing: -0.08em;
@@ -303,7 +284,7 @@ watch(
 }
 
 .brand-name {
-  color: #f4f7ff;
+  color: var(--vh-text);
   font-size: 20px;
   font-weight: 760;
   line-height: 1.05;
@@ -312,7 +293,7 @@ watch(
 
 .brand-caption {
   margin-top: 5px;
-  color: #7688a5;
+  color: var(--vh-text-soft);
   font-size: 8px;
   font-weight: 750;
   letter-spacing: 0.22em;
@@ -332,9 +313,9 @@ watch(
 :deep(.sidebar-menu) {
   position: relative;
   z-index: 1;
-  --el-menu-text-color: #8999b1;
-  --el-menu-active-color: #f7f8ff;
-  --el-menu-hover-bg-color: rgba(37, 87, 202, 0.1);
+  --el-menu-text-color: var(--vh-text-muted);
+  --el-menu-active-color: var(--vh-accent);
+  --el-menu-hover-bg-color: var(--vh-accent-soft);
 }
 
 :deep(.sidebar-menu .el-menu-item) {
@@ -343,7 +324,7 @@ watch(
   padding: 0 14px !important;
   border: 1px solid transparent;
   border-radius: 13px;
-  color: #91a0b7;
+  color: var(--vh-text-muted);
   line-height: 52px;
   transition: color 180ms ease, border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
 }
@@ -356,28 +337,28 @@ watch(
   border-radius: 99px;
   content: "";
   opacity: 0;
-  background: linear-gradient(var(--vh-accent), #4fe0ff);
-  box-shadow: 0 0 12px rgba(93, 216, 255, 0.72);
+  background: #61E8FF;
+  box-shadow: none;
   transition: opacity 180ms ease;
 }
 
 :deep(.sidebar-menu .el-menu-item .el-icon) {
   width: 22px;
   margin-right: 12px;
-  color: #8292aa;
+  color: var(--vh-text-soft);
   font-size: 20px;
 }
 
 :deep(.sidebar-menu .el-menu-item:hover) {
-  color: #dbe5f5;
-  background: rgba(37, 87, 202, 0.1);
+  color: var(--vh-text);
+  background: var(--vh-accent-soft);
 }
 
 :deep(.sidebar-menu .el-menu-item.is-active) {
-  border-color: rgba(71, 118, 223, 0.2);
-  color: #f6f7ff;
-  background: linear-gradient(100deg, rgba(37, 87, 202, 0.28), rgba(72, 196, 228, 0.055));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 9px 22px rgba(0, 0, 0, 0.12);
+  border-color: transparent;
+  color: var(--vh-accent);
+  background: var(--vh-accent-soft);
+  box-shadow: none;
 }
 
 :deep(.sidebar-menu .el-menu-item.is-active::before) {
@@ -385,8 +366,8 @@ watch(
 }
 
 :deep(.sidebar-menu .el-menu-item.is-active .el-icon) {
-  color: #6f98f5;
-  filter: drop-shadow(0 0 7px rgba(37, 87, 202, 0.48));
+  color: var(--vh-accent);
+  filter: none;
 }
 
 .sidebar-menu-copy {
@@ -400,32 +381,11 @@ watch(
 
 .sidebar-menu-label {
   font-size: 13px;
-  font-weight: 620;
+  font-weight: 400;
 }
 
-.sidebar-menu-caption {
-  color: #52617a;
-  font-size: 8px;
+:deep(.sidebar-menu .el-menu-item.is-active .sidebar-menu-label) {
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-:deep(.sidebar-menu.el-menu--collapse) {
-  width: 100%;
-}
-
-:deep(.sidebar-menu.el-menu--collapse .el-menu-item) {
-  display: grid;
-  width: 48px;
-  height: 48px;
-  margin: 5px auto;
-  padding: 0 !important;
-  place-items: center;
-}
-
-:deep(.sidebar-menu.el-menu--collapse .el-menu-item .el-icon) {
-  margin: 0;
 }
 
 .sidebar-footer {
@@ -438,17 +398,17 @@ watch(
 
 .system-card {
   padding: 13px;
-  border: 1px solid rgba(143, 166, 202, 0.11);
+  border: 1px solid var(--ui-border-muted);
   border-radius: 15px;
-  background: rgba(117, 139, 174, 0.055);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  background: var(--ui-surface-muted);
+  box-shadow: var(--ui-shadow-sm);
 }
 
 .system-card-topline {
   display: flex;
   align-items: center;
   gap: 7px;
-  color: #8fa0b9;
+  color: var(--vh-text-muted);
   font-size: 9px;
   font-weight: 650;
   letter-spacing: 0.04em;
@@ -484,7 +444,7 @@ watch(
   gap: 10px;
   margin-top: 12px;
   padding-top: 11px;
-  border-top: 1px solid rgba(143, 166, 202, 0.09);
+  border-top: 1px solid var(--ui-border-muted);
 }
 
 .user-avatar {
@@ -492,17 +452,17 @@ watch(
   width: 31px;
   height: 31px;
   place-items: center;
-  border: 1px solid rgba(71, 118, 223, 0.24);
+  border: 1px solid color-mix(in srgb, var(--vh-accent) 24%, transparent);
   border-radius: 10px;
-  color: #d6e2ff;
-  background: rgba(37, 87, 202, 0.2);
+  color: var(--vh-accent);
+  background: var(--vh-accent-soft);
   font-size: 11px;
   font-weight: 750;
 }
 
 .user-name {
   overflow: hidden;
-  color: #dbe4f3;
+  color: var(--vh-text);
   font-size: 11px;
   font-weight: 650;
   text-overflow: ellipsis;
@@ -511,14 +471,12 @@ watch(
 
 .user-role {
   margin-top: 2px;
-  color: #60718c;
+  color: var(--vh-text-soft);
   font-size: 8px;
   letter-spacing: 0.04em;
 }
 
-.logout-button,
-.rail-logout,
-.collapse-button {
+.logout-button {
   display: grid;
   border: 0;
   place-items: center;
@@ -529,7 +487,7 @@ watch(
   width: 28px;
   height: 28px;
   border-radius: 9px;
-  color: #71819a;
+  color: var(--vh-text-soft);
   background: transparent;
   transition: color 160ms ease, background 160ms ease;
 }
@@ -539,19 +497,8 @@ watch(
   background: rgba(255, 103, 125, 0.1);
 }
 
-.logout-button svg,
-.rail-logout svg {
+.logout-button svg {
   width: 17px;
-}
-
-.rail-logout {
-  width: 48px;
-  height: 48px;
-  margin: 0 auto;
-  border: 1px solid rgba(143, 166, 202, 0.1);
-  border-radius: 13px;
-  color: #7e8da5;
-  background: rgba(117, 139, 174, 0.05);
 }
 
 .topbar {
@@ -579,23 +526,6 @@ watch(
 
 .topbar-actions {
   gap: 10px;
-}
-
-.collapse-button {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--ui-border);
-  border-radius: 11px;
-  color: var(--vh-text-muted);
-  background: var(--ui-surface);
-  box-shadow: var(--ui-shadow-sm);
-  transition: color 160ms ease, border-color 160ms ease, transform 160ms ease;
-}
-
-.collapse-button:hover {
-  border-color: rgba(37, 87, 202, 0.3);
-  color: var(--vh-accent);
-  transform: translateY(-1px);
 }
 
 .route-context {
@@ -721,7 +651,125 @@ watch(
   letter-spacing: 0.08em;
 }
 
+/* One floating rail, then an open canvas. Surfaces appear only around grouped data. */
+.app-shell {
+  gap: 18px;
+  padding: 14px;
+  background: var(--vh-page);
+}
+
+.desktop-sidebar {
+  height: 100%;
+  border: 1px solid rgba(30, 30, 32, 0.1);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 16px 42px rgba(24, 31, 44, 0.08);
+  backdrop-filter: blur(35px) saturate(135%);
+  -webkit-backdrop-filter: blur(35px) saturate(135%);
+}
+
+.sidebar-ambient {
+  opacity: 0;
+  background: none;
+}
+
+.workspace-shell {
+  min-width: 0;
+  border-radius: 22px;
+  background: transparent;
+}
+
+.topbar {
+  height: 70px !important;
+  flex-basis: 70px;
+  padding: 0 12px 0 8px;
+  border-bottom: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:deep(.sidebar-menu .el-menu-item) {
+  border: 0;
+  border-radius: 14px;
+}
+
+:deep(.sidebar-menu .el-menu-item.is-active) {
+  border: 0;
+  color: var(--vh-accent);
+  background: rgba(37, 87, 202, 0.12);
+  box-shadow: none;
+}
+
+:deep(.sidebar-menu .el-menu-item.is-active .el-icon) {
+  color: var(--vh-accent);
+  filter: none;
+}
+
+.main-inner {
+  max-width: 1420px;
+}
+
+html.dark .app-shell {
+  background: #000;
+}
+
+html.dark .desktop-sidebar {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(22, 22, 23, 0.85);
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.34);
+}
+
+html.dark .brand-caption {
+  color: var(--vh-dark-text-secondary);
+}
+
+html.dark :deep(.sidebar-menu .el-menu-item .el-icon) {
+  color: var(--vh-dark-text-secondary);
+}
+
+html.dark .user-avatar {
+  color: #d6e2ff;
+  background: rgba(37, 87, 202, 0.2);
+}
+
+html.dark :deep(.sidebar-menu .el-menu-item.is-active) {
+  color: var(--vh-accent);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+html.dark :deep(.sidebar-menu .el-menu-item),
+html.dark :deep(.sidebar-menu .el-menu-item:hover) {
+  color: var(--vh-dark-text-primary);
+}
+
+html.dark :deep(.sidebar-menu .el-menu-item.is-active .sidebar-menu-label) {
+  color: var(--vh-accent);
+}
+
+html.dark :deep(.sidebar-menu .el-menu-item.is-active .el-icon) {
+  color: #69a7ff;
+}
+
+html.dark .system-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+html.dark .topbar {
+  color: var(--vh-dark-text-primary);
+}
+
 @media (max-width: 767px) {
+  .app-shell {
+    gap: 0;
+    padding: 0;
+  }
+
+  .workspace-shell {
+    border-radius: 0;
+  }
+
   .topbar {
     height: calc(60px + env(safe-area-inset-top)) !important;
     flex-basis: calc(60px + env(safe-area-inset-top));

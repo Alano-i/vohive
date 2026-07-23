@@ -157,7 +157,12 @@ onMounted(() => {
       @retry="fetchDevices"
     />
 
-    <EmptyState v-if="devices.length === 0" title="暂无设备接入" subtitle="请先在设备管理中添加或接管设备" />
+    <EmptyState
+      v-if="devices.length === 0"
+      class="dashboard-empty-state"
+      title="暂无设备接入"
+      subtitle="请先在设备管理中添加或接管设备"
+    />
 
     <!-- Grid View -->
     <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5">
@@ -193,18 +198,6 @@ onMounted(() => {
   min-height: 138px;
   overflow: hidden;
   padding: 18px 19px 16px;
-}
-
-.metric-card::after {
-  position: absolute;
-  right: -24px;
-  bottom: -48px;
-  width: 110px;
-  height: 110px;
-  border: 1px solid var(--ui-border);
-  border-radius: 50%;
-  content: "";
-  box-shadow: 0 0 0 18px color-mix(in srgb, var(--vh-accent) 2.5%, transparent);
 }
 
 .metric-head {

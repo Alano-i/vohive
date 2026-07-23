@@ -83,6 +83,25 @@ func parseCommaFields(s string) []string {
 	return parts
 }
 
+func parseRegistrationURC(line string) (string, int, bool) {
+	key := urcKey(line)
+	switch key {
+	case "+CREG", "+CGREG", "+CEREG":
+	default:
+		return "", 0, false
+	}
+
+	fields := parseCommaFields(parseURCAfterColon(line))
+	if len(fields) == 0 {
+		return "", 0, false
+	}
+	stat, ok := parseInt(fields[0])
+	if !ok {
+		return "", 0, false
+	}
+	return strings.TrimPrefix(key, "+"), stat, true
+}
+
 func (m *Manager) formatURC(line string) urcFormatResult {
 	s := strings.TrimSpace(line)
 	if s == "" {
@@ -116,11 +135,9 @@ func (m *Manager) formatURC(line string) urcFormatResult {
 	case "+CREG", "+CGREG", "+CEREG":
 		rest := parseURCAfterColon(s)
 		fields := parseCommaFields(rest)
-		stat := -1
-		if len(fields) >= 2 {
-			if v, ok := parseInt(fields[1]); ok {
-				stat = v
-			}
+		_, stat, ok := parseRegistrationURC(s)
+		if !ok {
+			stat = -1
 		}
 		out.Level = urcLogInfo
 		out.Msg = "URC: 注册状态变更"
@@ -128,11 +145,11 @@ func (m *Manager) formatURC(line string) urcFormatResult {
 		if stat >= 0 && key == "+CREG" {
 			out.Fields = append(out.Fields, "stat_text", m.getRegStatusText(stat))
 		}
-		if len(fields) >= 4 {
-			out.Fields = append(out.Fields, "lac", fields[2], "cell_id", fields[3])
+		if len(fields) >= 3 {
+			out.Fields = append(out.Fields, "lac", fields[1], "cell_id", fields[2])
 		}
-		if len(fields) >= 5 {
-			out.Fields = append(out.Fields, "act", fields[4])
+		if len(fields) >= 4 {
+			out.Fields = append(out.Fields, "act", fields[3])
 		}
 		return out
 

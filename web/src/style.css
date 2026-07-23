@@ -13,6 +13,9 @@
 
 :root {
   color-scheme: light;
+  /* Dark typography controls: adjust only these two values. */
+  --vh-dark-text-primary: #ffffff;
+  --vh-dark-text-secondary: rgba(255, 255, 255, 0.5);
   --vh-accent: #2557ca;
   --vh-accent-strong: #1947ad;
   --vh-accent-soft: rgba(37, 87, 202, 0.12);
@@ -20,18 +23,18 @@
   --vh-positive: #0c9b71;
   --vh-warning: #e18a16;
   --vh-danger: #e05264;
-  --vh-page: #edf2f8;
-  --vh-page-deep: #e7edf5;
+  --vh-page: #f3f4f6;
+  --vh-page-deep: #e9ebef;
   --vh-text: #101828;
   --vh-text-muted: #667085;
   --vh-text-soft: #98a2b3;
-  --ui-surface: rgba(255, 255, 255, 0.72);
-  --ui-surface-strong: rgba(255, 255, 255, 0.92);
-  --ui-surface-muted: rgba(245, 248, 252, 0.8);
+  --ui-surface: rgba(255, 255, 255, 0.78);
+  --ui-surface-strong: rgba(255, 255, 255, 0.94);
+  --ui-surface-muted: rgba(247, 248, 250, 0.88);
   --ui-border: rgba(30, 53, 87, 0.1);
   --ui-border-muted: rgba(30, 53, 87, 0.065);
-  --ui-backdrop: blur(22px) saturate(145%);
-  --ui-radius-sm: 9px;
+  --ui-backdrop: blur(24px) saturate(135%);
+  --ui-radius-sm: 8px;
   --ui-radius-md: 12px;
   --ui-radius-lg: 16px;
   --ui-radius-xl: 20px;
@@ -68,16 +71,16 @@ html.dark {
   --vh-positive: #43d5a3;
   --vh-warning: #ffb454;
   --vh-danger: #ff7386;
-  --vh-page: #080d18;
-  --vh-page-deep: #050912;
-  --vh-text: #f0f5ff;
-  --vh-text-muted: #98a7bd;
-  --vh-text-soft: #65758d;
-  --ui-surface: rgba(18, 27, 44, 0.72);
-  --ui-surface-strong: rgba(21, 31, 50, 0.9);
-  --ui-surface-muted: rgba(11, 18, 31, 0.68);
-  --ui-border: rgba(154, 184, 224, 0.12);
-  --ui-border-muted: rgba(154, 184, 224, 0.075);
+  --vh-page: #000000;
+  --vh-page-deep: #000000;
+  --vh-text: var(--vh-dark-text-primary);
+  --vh-text-muted: var(--vh-dark-text-secondary);
+  --vh-text-soft: var(--vh-dark-text-secondary);
+  --ui-surface: rgba(32, 32, 34, 0.88);
+  --ui-surface-strong: rgba(32, 32, 34, 0.88);
+  --ui-surface-muted: rgba(44, 44, 46, 0.72);
+  --ui-border: rgba(255, 255, 255, 0.12);
+  --ui-border-muted: rgba(255, 255, 255, 0.08);
   --ui-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.22), 0 8px 22px rgba(0, 0, 0, 0.12);
   --ui-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.28), 0 18px 48px rgba(0, 0, 0, 0.2);
   --ui-shadow-lg: 0 28px 80px rgba(0, 0, 0, 0.4);
@@ -97,11 +100,41 @@ html.dark {
   --el-fill-color-blank: rgba(16, 25, 42, 0.92);
   --el-fill-color-light: rgba(141, 166, 203, 0.08);
   --el-fill-color-lighter: rgba(141, 166, 203, 0.05);
-  --el-bg-color: #111a2b;
-  --el-bg-color-overlay: #151f32;
-  --el-text-color-primary: #f0f5ff;
-  --el-text-color-regular: #b4c0d1;
-  --el-text-color-secondary: #8493aa;
+  --el-bg-color: #1f1f22;
+  --el-bg-color-overlay: #2c2c2e;
+  --el-text-color-primary: var(--vh-dark-text-primary);
+  --el-text-color-regular: var(--vh-dark-text-primary);
+  --el-text-color-secondary: var(--vh-dark-text-secondary);
+  --el-text-color-placeholder: var(--vh-dark-text-secondary);
+  --el-text-color-disabled: var(--vh-dark-text-secondary);
+}
+
+html.dark .text-white,
+html.dark .text-gray-900,
+html.dark .text-gray-800,
+html.dark .text-gray-700,
+html.dark .text-gray-200,
+html.dark .text-gray-100 {
+  color: var(--vh-dark-text-primary) !important;
+}
+
+html.dark .text-gray-600,
+html.dark .text-gray-500,
+html.dark .text-gray-400,
+html.dark .text-gray-300 {
+  color: var(--vh-dark-text-secondary) !important;
+}
+
+html.dark .dark\:text-white,
+html.dark .dark\:text-gray-100,
+html.dark .dark\:text-gray-200 {
+  color: var(--vh-dark-text-primary) !important;
+}
+
+html.dark .dark\:text-gray-300,
+html.dark .dark\:text-gray-400,
+html.dark .dark\:text-gray-500 {
+  color: var(--vh-dark-text-secondary) !important;
 }
 
 *,
@@ -129,20 +162,14 @@ body {
   min-width: 320px;
   overflow: hidden;
   color: var(--vh-text);
-  background:
-    radial-gradient(circle at 18% -10%, rgba(37, 87, 202, 0.13), transparent 32rem),
-    radial-gradient(circle at 96% 92%, rgba(8, 169, 212, 0.09), transparent 30rem),
-    var(--vh-page);
+  background: var(--vh-page);
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
 
 html.dark body {
-  background:
-    radial-gradient(circle at 12% -8%, rgba(37, 87, 202, 0.18), transparent 34rem),
-    radial-gradient(circle at 96% 92%, rgba(36, 193, 226, 0.08), transparent 34rem),
-    var(--vh-page);
+  background: #000;
 }
 
 button,
@@ -212,24 +239,16 @@ a,
   inset: 0;
   pointer-events: none;
   content: "";
-  opacity: 0.45;
-  background-image:
-    linear-gradient(rgba(62, 87, 123, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(62, 87, 123, 0.045) 1px, transparent 1px);
-  background-size: 36px 36px;
-  mask-image: linear-gradient(to bottom, black, transparent 72%);
+  opacity: 0;
 }
 
 .dark .app-shell::before {
-  opacity: 0.72;
-  background-image:
-    linear-gradient(rgba(116, 148, 194, 0.042) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(116, 148, 194, 0.042) 1px, transparent 1px);
+  opacity: 0;
 }
 
 .app-main {
   position: relative;
-  padding: 28px 32px 40px;
+  padding: 18px 26px 40px;
   --ui-shadow-sm: 0 1px 2px rgba(18, 38, 68, 0.02), 0 6px 18px rgba(18, 38, 68, 0.015);
   --ui-shadow-md: 0 1px 2px rgba(18, 38, 68, 0.02), 0 14px 38px rgba(18, 38, 68, 0.0375);
   --ui-shadow-lg: 0 24px 70px rgba(18, 38, 68, 0.07);
@@ -791,5 +810,234 @@ pre {
 
   .sms-action-sheet {
     padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* iPadOS material language for the authenticated product surfaces. */
+.app-main .ui-card,
+.app-main .ui-panel,
+.app-main .ui-surface,
+.app-main .ui-surface-strong {
+  border-radius: var(--ui-radius-xl);
+  border-color: var(--ui-border);
+  background: var(--ui-surface-strong);
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.app-main .ui-panel,
+.app-main .ui-panel-muted,
+.app-main .ui-surface-muted {
+  border-radius: var(--ui-radius-lg);
+}
+
+html.dark .app-main .ui-card,
+html.dark .app-main .ui-panel,
+html.dark .app-main .ui-surface,
+html.dark .app-main .ui-surface-strong {
+  border: 0;
+  background: rgba(32, 32, 34, 0.88);
+  box-shadow: none;
+}
+
+html.dark .app-main .ui-panel-muted,
+html.dark .app-main .ui-surface-muted {
+  border: 0;
+  background: rgba(44, 44, 46, 0.72);
+  box-shadow: none;
+}
+
+html.dark .app-main .ui-card-glow {
+  opacity: 0;
+}
+
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item,
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item:hover {
+  color: var(--vh-dark-text-primary);
+}
+
+html.dark .desktop-sidebar .sidebar-menu {
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.05);
+}
+
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item:not(.is-active):hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item.is-active {
+  color: var(--vh-dark-text-primary) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item::before {
+  background: #61E8FF !important;
+  box-shadow: none !important;
+}
+
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item.is-active .sidebar-menu-label {
+  color: var(--vh-dark-text-primary) !important;
+}
+
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item.is-active .el-icon {
+  color: var(--vh-dark-text-primary) !important;
+  filter: none !important;
+}
+
+html.dark .desktop-sidebar .sidebar-menu .sidebar-menu-label {
+  font-weight: 400;
+}
+
+html.dark .desktop-sidebar .sidebar-menu .el-menu-item.is-active .sidebar-menu-label {
+  font-weight: 700;
+}
+
+html.dark .desktop-sidebar .system-status-label,
+html.dark .desktop-sidebar .user-name {
+  color: var(--vh-dark-text-primary);
+}
+
+html.dark .desktop-sidebar .user-role,
+html.dark .desktop-sidebar .logout-button {
+  color: var(--vh-dark-text-secondary);
+}
+
+html.dark .dashboard-page .dashboard-empty-state {
+  border: 0 !important;
+  background: rgba(32, 32, 34, 0.88) !important;
+  box-shadow: none !important;
+}
+
+.ui-card-hover {
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1), box-shadow 220ms ease, background-color 220ms ease;
+}
+
+.ui-card-hover:active,
+.el-button:not(.is-text):not(.is-link):active,
+.mobile-tab:active,
+.theme-toggle-button:active {
+  transform: scale(.98);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+.el-button:focus-visible,
+.el-menu-item:focus-visible,
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused {
+  outline: 3px solid color-mix(in srgb, var(--vh-accent) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.el-button:not(.is-text):not(.is-link) {
+  min-height: 40px;
+  border-radius: 12px;
+  box-shadow: none;
+  font-weight: 650;
+}
+
+.el-button:not(.is-text):not(.is-link):hover,
+.el-button:not(.is-text):not(.is-link):focus-visible {
+  box-shadow: 0 7px 18px rgba(24, 31, 44, 0.12);
+}
+
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner,
+.el-input-number .el-input__wrapper {
+  min-height: 42px;
+  border-radius: 12px;
+  border-color: var(--ui-border);
+  background: var(--ui-surface-muted);
+}
+
+html.dark .el-input__wrapper,
+html.dark .el-select__wrapper,
+html.dark .el-textarea__inner,
+html.dark .el-input-number .el-input__wrapper {
+  border-color: transparent;
+  background: #2c2c2e;
+}
+
+.el-checkbox__inner,
+.el-radio__inner {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-muted);
+}
+
+.el-table {
+  --el-table-header-bg-color: var(--ui-surface-muted);
+  --el-table-row-hover-bg-color: var(--vh-accent-soft);
+  --el-table-border-color: var(--ui-border-muted);
+}
+
+html.dark .el-table {
+  --el-table-header-bg-color: #2c2c2e;
+  --el-table-row-hover-bg-color: rgba(255, 255, 255, 0.06);
+  --el-table-border-color: rgba(255, 255, 255, 0.08);
+}
+
+.el-dialog,
+.el-drawer,
+.el-message,
+.el-notification,
+.el-popover,
+.el-dropdown__popper {
+  border-radius: 18px;
+}
+
+html.dark .el-dialog,
+html.dark .el-drawer,
+html.dark .el-popover,
+html.dark .el-dropdown__popper {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(31, 31, 34, 0.96);
+}
+
+.el-overlay {
+  background: rgba(0, 0, 0, 0.54);
+}
+
+.error-state {
+  border-radius: var(--ui-radius-lg) !important;
+}
+
+.empty-state {
+  border-radius: var(--ui-radius-lg) !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .desktop-sidebar,
+  .topbar,
+  .mobile-tabbar,
+  .el-dialog,
+  .el-drawer,
+  .el-popover,
+  .el-dropdown__popper {
+    background: var(--ui-surface-strong) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .desktop-sidebar,
+  .ui-card,
+  .ui-panel,
+  .el-input__wrapper,
+  .el-select__wrapper,
+  .el-textarea__inner,
+  .el-dialog,
+  .el-drawer,
+  .mobile-tabbar {
+    border: 1px solid currentColor !important;
+  }
+
+  .ui-card,
+  .ui-panel {
+    box-shadow: none !important;
   }
 }

@@ -8,7 +8,6 @@ defineProps<{
 <template>
   <header class="page-header flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
     <div>
-      <div class="page-eyebrow">Control module</div>
       <h1 class="page-title">{{ title }}</h1>
       <p v-if="subtitle" class="page-subtitle">{{ subtitle }}</p>
     </div>

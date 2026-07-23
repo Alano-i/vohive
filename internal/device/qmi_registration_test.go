@@ -107,6 +107,17 @@ func qmiSearchingServingSeq(count int, final *backend.ServingSystem) []*backend.
 	return seq
 }
 
+func qmiUnregisteredServingSeq(count int, final *backend.ServingSystem) []*backend.ServingSystem {
+	seq := make([]*backend.ServingSystem, 0, count+1)
+	for i := 0; i < count; i++ {
+		seq = append(seq, &backend.ServingSystem{RegStatus: 0, RegStatusText: "未注册"})
+	}
+	if final != nil {
+		seq = append(seq, final)
+	}
+	return seq
+}
+
 func TestEnsureQMIRegistrationRegistersAndAttaches(t *testing.T) {
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
@@ -148,7 +159,61 @@ func TestEnsureQMIRegistrationWaitsForSIMReady(t *testing.T) {
 	}
 }
 
-func TestEnsureQMIRegistrationRegistersWhenSearching(t *testing.T) {
+func TestEnsureQMIRegistrationOnlyDoesNotRequirePSAttach(t *testing.T) {
+	ctrl := &qmiRegistrationTestController{
+		servingSeq: []*backend.ServingSystem{{
+			RegStatus: 1, RegStatusText: "已注册(本地)", PSAttached: false,
+		}},
+	}
+
+	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
+		PollInterval:     time.Nanosecond,
+		MaxAttempts:      2,
+		RegistrationOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("ensureQMIRegistration() error = %v", err)
+	}
+	if len(ctrl.attachCalls) != 0 {
+		t.Fatalf("attachCalls=%v want none for registration-only reconcile", ctrl.attachCalls)
+	}
+}
+
+func TestEnsureQMIRegistrationUsesATDenialWhenQMIKeepsSearching(t *testing.T) {
+	ctrl := &qmiRegistrationTestController{
+		servingSeq: qmiSearchingServingSeq(5, nil),
+	}
+	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
+		PollInterval:     time.Nanosecond,
+		MaxAttempts:      5,
+		RegistrationOnly: true,
+		ATRegistration: func() (int, string, bool) {
+			return 3, "注册被拒", true
+		},
+	})
+	if !errors.Is(err, errQMIRegistrationDenied) {
+		t.Fatalf("ensureQMIRegistration() error = %v, want registration denied", err)
+	}
+}
+
+func TestEnsureQMIRegistrationOnlyAcceptsATRegistrationWhenQMIIsStale(t *testing.T) {
+	ctrl := &qmiRegistrationTestController{
+		servingSeq: qmiSearchingServingSeq(5, nil),
+	}
+	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
+		PollInterval:     time.Nanosecond,
+		MaxAttempts:      5,
+		RegistrationOnly: true,
+		ATRegistration: func() (int, string, bool) {
+			return 5, "已注册(漫游)", true
+		},
+	})
+	if err != nil {
+		t.Fatalf("ensureQMIRegistration() error = %v", err)
+	}
+}
+
+func TestEnsureQMIRegistrationDoesNotRestartActiveSearch(t *testing.T) {
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
 		servingSeq: []*backend.ServingSystem{
@@ -165,8 +230,14 @@ func TestEnsureQMIRegistrationRegistersWhenSearching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureQMIRegistration() error = %v", err)
 	}
-	if ctrl.registerCalls != 1 {
-		t.Fatalf("registerCalls=%d want 1", ctrl.registerCalls)
+	if ctrl.registerCalls != 0 {
+		t.Fatalf("registerCalls=%d want 0 while modem is already searching", ctrl.registerCalls)
+	}
+	if ctrl.forceNetworkSearchCalls != 0 {
+		t.Fatalf("forceNetworkSearchCalls=%d want 0 while modem is already searching", ctrl.forceNetworkSearchCalls)
+	}
+	if len(ctrl.setModeCalls) != 0 {
+		t.Fatalf("setModeCalls=%v want no RF cycle while modem is already searching", ctrl.setModeCalls)
 	}
 }
 
@@ -199,12 +270,12 @@ func TestEnsureQMIRegistrationRecoversWhenStatusRemainsUnregistered(t *testing.T
 func TestEnsureQMIRegistrationSuppressesRadioCycleWhenOperatorScanActive(t *testing.T) {
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
-		servingSeq:  qmiSearchingServingSeq(qmiRegistrationSearchingRadioCycleAfterTries+1, nil),
+		servingSeq:  qmiUnregisteredServingSeq(qmiRegistrationUnregisteredRadioCycleAfterTries+1, nil),
 	}
 
 	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
 		PollInterval: time.Nanosecond,
-		MaxAttempts:  qmiRegistrationSearchingRadioCycleAfterTries + 1,
+		MaxAttempts:  qmiRegistrationUnregisteredRadioCycleAfterTries + 1,
 		SuppressRadioCycle: func() bool {
 			return true
 		},
@@ -220,13 +291,13 @@ func TestEnsureQMIRegistrationSuppressesRadioCycleWhenOperatorScanActive(t *test
 func TestEnsureQMIRegistrationSleepsWhenRadioCycleSuppressed(t *testing.T) {
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
-		servingSeq:  qmiSearchingServingSeq(qmiRegistrationSearchingRadioCycleAfterTries+2, nil),
+		servingSeq:  qmiUnregisteredServingSeq(qmiRegistrationUnregisteredRadioCycleAfterTries+2, nil),
 	}
 	pollInterval := 5 * time.Millisecond
 
 	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
 		PollInterval: pollInterval,
-		MaxAttempts:  qmiRegistrationSearchingRadioCycleAfterTries + 2,
+		MaxAttempts:  qmiRegistrationUnregisteredRadioCycleAfterTries + 2,
 		SuppressRadioCycle: func() bool {
 			return true
 		},
@@ -234,11 +305,11 @@ func TestEnsureQMIRegistrationSleepsWhenRadioCycleSuppressed(t *testing.T) {
 	if err == nil {
 		t.Fatal("ensureQMIRegistration() error=nil want timeout due to suppressed radio cycle")
 	}
-	if len(ctrl.servingCallTimes) < qmiRegistrationSearchingRadioCycleAfterTries+1 {
-		t.Fatalf("serving calls=%d want at least %d", len(ctrl.servingCallTimes), qmiRegistrationSearchingRadioCycleAfterTries+1)
+	if len(ctrl.servingCallTimes) < qmiRegistrationUnregisteredRadioCycleAfterTries+1 {
+		t.Fatalf("serving calls=%d want at least %d", len(ctrl.servingCallTimes), qmiRegistrationUnregisteredRadioCycleAfterTries+1)
 	}
-	suppressedAttemptIndex := qmiRegistrationSearchingRadioCycleAfterTries - 1
-	nextAttemptIndex := qmiRegistrationSearchingRadioCycleAfterTries
+	suppressedAttemptIndex := qmiRegistrationUnregisteredRadioCycleAfterTries - 1
+	nextAttemptIndex := qmiRegistrationUnregisteredRadioCycleAfterTries
 	if elapsed := ctrl.servingCallTimes[nextAttemptIndex].Sub(ctrl.servingCallTimes[suppressedAttemptIndex]); elapsed < pollInterval {
 		t.Fatalf("elapsed after suppressed radio-cycle attempt=%s want at least %s; path should not hot-loop", elapsed, pollInterval)
 	}
@@ -251,7 +322,7 @@ func TestEnsureQMIRegistrationReassertsAutomaticSystemSelectionWithPermanentRegi
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
 		servingSeq: []*backend.ServingSystem{
-			{RegStatus: 2, RegStatusText: "搜索中"},
+			{RegStatus: 0, RegStatusText: "未注册"},
 			{RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true},
 		},
 	}
@@ -310,7 +381,7 @@ func TestEnsureQMIRegistrationFallsBackWhenAutomaticRegisterMalformed(t *testing
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
 		servingSeq: []*backend.ServingSystem{
-			{RegStatus: 2, RegStatusText: "搜索中"},
+			{RegStatus: 0, RegStatusText: "未注册"},
 			{RegStatus: 2, RegStatusText: "搜索中"},
 			{RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true},
 		},
@@ -341,7 +412,7 @@ func TestEnsureQMIRegistrationFallsBackWhenAutomaticRegisterInvalidAction(t *tes
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
 		servingSeq: []*backend.ServingSystem{
-			{RegStatus: 2, RegStatusText: "搜索中"},
+			{RegStatus: 0, RegStatusText: "未注册"},
 			{RegStatus: 2, RegStatusText: "搜索中"},
 			{RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true},
 		},
@@ -368,43 +439,12 @@ func TestEnsureQMIRegistrationFallsBackWhenAutomaticRegisterInvalidAction(t *tes
 	}
 }
 
-func TestEnsureQMIRegistrationForcesNetworkSearchWhenSearchingPersistsAfterWake(t *testing.T) {
-	ctrl := &qmiRegistrationTestController{
-		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
-		servingSeq: []*backend.ServingSystem{
-			{RegStatus: 2, RegStatusText: "搜索中"},
-			{RegStatus: 2, RegStatusText: "搜索中"},
-			{RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true},
-		},
-	}
-
-	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
-		PollInterval: time.Nanosecond,
-		MaxAttempts:  4,
-	})
-	if err != nil {
-		t.Fatalf("ensureQMIRegistration() error = %v", err)
-	}
-	if ctrl.registerCalls != 1 {
-		t.Fatalf("registerCalls=%d want 1", ctrl.registerCalls)
-	}
-	if ctrl.forceNetworkSearchCalls != 1 {
-		t.Fatalf("forceNetworkSearchCalls=%d want 1", ctrl.forceNetworkSearchCalls)
-	}
-}
-
-func TestEnsureQMIRegistrationDoesNotRadioCycleEarlyAfterAcceptedForceSearch(t *testing.T) {
+func TestEnsureQMIRegistrationWaitsForActiveSearchWithoutRecoveryActions(t *testing.T) {
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
 		servingSeq: qmiSearchingServingSeq(5, &backend.ServingSystem{
 			RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true,
 		}),
-		registerErr: &qmi.QMIError{
-			Service:   0x03,
-			MessageID: qmi.NASInitiateNetworkRegister,
-			Result:    0x0001,
-			ErrorCode: qmi.QMIErrInvalidRegisterAction,
-		},
 	}
 
 	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
@@ -414,76 +454,44 @@ func TestEnsureQMIRegistrationDoesNotRadioCycleEarlyAfterAcceptedForceSearch(t *
 	if err != nil {
 		t.Fatalf("ensureQMIRegistration() error = %v", err)
 	}
-	if ctrl.forceNetworkSearchCalls != 1 {
-		t.Fatalf("forceNetworkSearchCalls=%d want 1", ctrl.forceNetworkSearchCalls)
+	if ctrl.registerCalls != 0 {
+		t.Fatalf("registerCalls=%d want 0", ctrl.registerCalls)
+	}
+	if ctrl.forceNetworkSearchCalls != 0 {
+		t.Fatalf("forceNetworkSearchCalls=%d want 0", ctrl.forceNetworkSearchCalls)
 	}
 	if len(ctrl.setModeCalls) != 0 {
-		t.Fatalf("setModeCalls=%v want no early radio cycle", ctrl.setModeCalls)
+		t.Fatalf("setModeCalls=%v want no RF cycle", ctrl.setModeCalls)
 	}
 }
 
-func TestEnsureQMIRegistrationRadioCyclesAfterDelayedSearchWindow(t *testing.T) {
+func TestEnsureQMIRegistrationTimesOutActiveSearchWithoutRestartingIt(t *testing.T) {
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
-		servingSeq: qmiSearchingServingSeq(qmiRegistrationSearchingRadioCycleAfterTries, &backend.ServingSystem{
-			RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true,
-		}),
-		registerErr: &qmi.QMIError{
-			Service:   0x03,
-			MessageID: qmi.NASInitiateNetworkRegister,
-			Result:    0x0001,
-			ErrorCode: qmi.QMIErrInvalidRegisterAction,
-		},
+		servingSeq:  qmiSearchingServingSeq(4, nil),
 	}
 
 	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
 		PollInterval: time.Nanosecond,
-		MaxAttempts:  qmiRegistrationSearchingRadioCycleAfterTries + 2,
+		MaxAttempts:  4,
 	})
-	if err != nil {
-		t.Fatalf("ensureQMIRegistration() error = %v", err)
+	if err == nil {
+		t.Fatal("ensureQMIRegistration() error=nil want timeout")
 	}
-	if ctrl.forceNetworkSearchCalls != 1 {
-		t.Fatalf("forceNetworkSearchCalls=%d want 1", ctrl.forceNetworkSearchCalls)
+	if ctrl.registerCalls != 0 || ctrl.forceNetworkSearchCalls != 0 {
+		t.Fatalf("registerCalls=%d forceNetworkSearchCalls=%d want no recovery actions", ctrl.registerCalls, ctrl.forceNetworkSearchCalls)
 	}
-	if got, want := ctrl.setModeCalls, []backend.OperatingMode{backend.ModeRFOff, backend.ModeOnline}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("setModeCalls=%v want %v", got, want)
-	}
-}
-
-func TestEnsureQMIRegistrationAllowsFullGraceWindowAfterRadioCycle(t *testing.T) {
-	searchesBeforeSuccess := qmiRegistrationDefaultMaxAttempts - 1
-	ctrl := &qmiRegistrationTestController{
-		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
-		servingSeq: qmiSearchingServingSeq(searchesBeforeSuccess, &backend.ServingSystem{
-			RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true,
-		}),
-	}
-
-	err := ensureQMIRegistration(context.Background(), "dev-qmi", config.DeviceConfig{}, ctrl, ctrl, qmiRegistrationOptions{
-		PollInterval: time.Nanosecond,
-	})
-	if err != nil {
-		t.Fatalf("ensureQMIRegistration() error = %v", err)
-	}
-	if got, want := ctrl.setModeCalls, []backend.OperatingMode{backend.ModeRFOff, backend.ModeOnline}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("setModeCalls=%v want %v", got, want)
-	}
-	if len(ctrl.servingCallTimes) != qmiRegistrationDefaultMaxAttempts {
-		t.Fatalf("serving calls=%d want %d", len(ctrl.servingCallTimes), qmiRegistrationDefaultMaxAttempts)
+	if len(ctrl.setModeCalls) != 0 {
+		t.Fatalf("setModeCalls=%v want no RF cycle", ctrl.setModeCalls)
 	}
 }
 
 func TestEnsureQMIRegistrationRadioCyclesSoonerWhenForceNetworkSearchUnsupported(t *testing.T) {
 	ctrl := &qmiRegistrationTestController{
 		simStatuses: []qmi.SIMStatus{qmi.SIMReady},
-		servingSeq: []*backend.ServingSystem{
-			{RegStatus: 2, RegStatusText: "搜索中"},
-			{RegStatus: 2, RegStatusText: "搜索中"},
-			{RegStatus: 2, RegStatusText: "搜索中"},
-			{RegStatus: 2, RegStatusText: "搜索中"},
-			{RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true},
-		},
+		servingSeq: qmiUnregisteredServingSeq(4, &backend.ServingSystem{
+			RegStatus: 5, RegStatusText: "已注册(漫游)", PSAttached: true,
+		}),
 		forceNetworkSearchErr: &qmi.QMIError{
 			Service:   0x03,
 			MessageID: qmi.NASForceNetworkSearch,

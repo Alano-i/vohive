@@ -425,10 +425,14 @@ const networkPanelMessage = computed(() => {
 <style scoped>
 .overview-panel-background {
   border: 0 !important;
-  background: rgba(0, 0, 0, 0.2) !important;
+  background: var(--ui-surface-muted) !important;
   box-shadow: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+:global(html.dark .overview-panel-background) {
+  background: rgba(0, 0, 0, 0.2) !important;
 }
 
 :deep(.network-empty-state .empty-state-title) {

@@ -129,6 +129,9 @@ type Manager struct {
 	// USSD 会话通道：当有协程在等待 USSD 响应时，+CUSD URC 会被投递到此通道
 	ussdChan chan USSDResult
 
+	registrationURCMu    sync.Mutex
+	registrationURCState map[string]int
+
 	// RDY 事件订阅（模组重启后广播）
 	rdyMu   sync.Mutex
 	rdySubs []chan struct{}
@@ -163,18 +166,19 @@ func (m *Manager) pureQMIBackend() bool {
 
 func New(cfg config.DeviceConfig) (*Manager, error) {
 	m := &Manager{
-		cfg:          cfg,
-		atPort:       cfg.ATPort,
-		stop:         make(chan struct{}),
-		cmdChan:      make(chan commandRequest, 10),
-		cmdChanHigh:  make(chan commandRequest, 5),
-		rxChan:       make(chan rxMsg, 100),
-		triggerChan:  make(chan struct{}, 1),
-		ready:        make(chan struct{}),
-		healthy:      true,
-		reassembler:  smscodec.NewReassembler(),
-		ussdChan:     make(chan USSDResult, 1),
-		apduSessions: make(map[int]apduSessionInfo),
+		cfg:                  cfg,
+		atPort:               cfg.ATPort,
+		stop:                 make(chan struct{}),
+		cmdChan:              make(chan commandRequest, 10),
+		cmdChanHigh:          make(chan commandRequest, 5),
+		rxChan:               make(chan rxMsg, 100),
+		triggerChan:          make(chan struct{}, 1),
+		ready:                make(chan struct{}),
+		healthy:              true,
+		reassembler:          smscodec.NewReassembler(),
+		ussdChan:             make(chan USSDResult, 1),
+		registrationURCState: make(map[string]int),
+		apduSessions:         make(map[int]apduSessionInfo),
 		reqPool: sync.Pool{
 			New: func() interface{} {
 				return &commandRequest{
@@ -711,20 +715,12 @@ RespLoop:
 				req.respChan <- "> "
 				break RespLoop
 			} else if m.isURC(line) {
-				// 对于确认为 URC 的行，始终分发出去
-				m.handleURC(line)
-
-				// 但仅当它是某些明确的、完全异步的事件（如短信通知、来电、USSD、插拔卡）时，才将其从当前命令的 fullResponse 中剔除，以免污染解析器
-				// 其余如 +CIMI:, +QCCID:, +CSQ: 实际上既是 URC 也是命令回显，必须被当前命令捕获！
-				isPureAsyncURC := func(s string) bool {
-					key := urcKey(s)
-					switch key {
-					case "+CUSD", "+CMTI", "RING", "+CLIP", "+QSIMSTAT", "+QSTKURC", "+QPCMV":
-						return true
-					}
-					return false
+				if isSolicitedRegistrationResponse(req.cmd, line) {
+					fullResponse = append(fullResponse, line)
+					continue
 				}
 
+				m.handleURC(line)
 				if !isPureAsyncURC(line) {
 					fullResponse = append(fullResponse, line)
 				}
@@ -732,6 +728,30 @@ RespLoop:
 				fullResponse = append(fullResponse, line)
 			}
 		}
+	}
+}
+
+func isSolicitedRegistrationResponse(cmd, line string) bool {
+	cmd = strings.ToUpper(strings.TrimSpace(cmd))
+	key := strings.ToUpper(urcKey(line))
+	switch cmd {
+	case "AT+CREG?":
+		return key == "+CREG"
+	case "AT+CGREG?":
+		return key == "+CGREG"
+	case "AT+CEREG?":
+		return key == "+CEREG"
+	default:
+		return false
+	}
+}
+
+func isPureAsyncURC(line string) bool {
+	switch urcKey(line) {
+	case "+CREG", "+CGREG", "+CEREG", "+CUSD", "+CMTI", "RING", "+CLIP", "+QSIMSTAT", "+QSTKURC", "+QPCMV":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1293,6 +1313,19 @@ func (m *Manager) dispatchSIMStatusURC(inserted *bool, state string) {
 	}
 }
 
+func (m *Manager) shouldLogRegistrationURC(line string) bool {
+	domain, stat, ok := parseRegistrationURC(line)
+	if !ok {
+		return true
+	}
+
+	m.registrationURCMu.Lock()
+	defer m.registrationURCMu.Unlock()
+	previous, exists := m.registrationURCState[domain]
+	m.registrationURCState[domain] = stat
+	return !exists || previous != stat
+}
+
 // handleURC 处理 URC
 func (m *Manager) handleURC(line string) {
 	s := strings.TrimSpace(line)
@@ -1301,14 +1334,16 @@ func (m *Manager) handleURC(line string) {
 	}
 
 	fr := m.formatURC(s)
-	msg := fmt.Sprintf("[%s] %s", m.cfg.ID, fr.Msg)
-	switch fr.Level {
-	case urcLogWarn:
-		logger.Warn(msg, fr.Fields...)
-	case urcLogInfo:
-		logger.Info(msg, fr.Fields...)
-	default:
-		logger.Debug(msg, fr.Fields...)
+	if fr.Key != "+CREG" && fr.Key != "+CGREG" && fr.Key != "+CEREG" || m.shouldLogRegistrationURC(s) {
+		msg := fmt.Sprintf("[%s] %s", m.cfg.ID, fr.Msg)
+		switch fr.Level {
+		case urcLogWarn:
+			logger.Warn(msg, fr.Fields...)
+		case urcLogInfo:
+			logger.Info(msg, fr.Fields...)
+		default:
+			logger.Debug(msg, fr.Fields...)
+		}
 	}
 
 	// 模组重启信号：广播给所有 SubscribeRDY() 的等待方。

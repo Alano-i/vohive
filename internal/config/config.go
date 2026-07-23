@@ -120,19 +120,13 @@ type ServerConfig struct {
 }
 
 type ESIMSwitchConfig struct {
-	// UseRefreshTrue uses refresh=true for the main switch path. Default false preserves current behavior.
-	UseRefreshTrue bool `mapstructure:"use_refresh_true"`
 	// EventGatedConverge uses UIM indication events to gate post-switch convergence. Default false.
 	EventGatedConverge bool `mapstructure:"event_gated_converge"`
-	// RadioCycle performs LowPower -> Online radio cycling around switch. Default false.
-	RadioCycle bool `mapstructure:"radio_cycle"`
 	// ReinitWindowMS is the expected UIM reinitialization window in milliseconds. Default 0 disables the window.
 	// Only effective when EventGatedConverge=true; ReinitWindow marks the period during which GetUIMReadiness
 	// timeouts do not trigger whole-core recovery (to avoid triggering on firmware reinitialization stalls).
 	// If EventGatedConverge=false, ReinitWindowMS is silently ignored.
 	ReinitWindowMS int `mapstructure:"reinit_window_ms"`
-	// NASAttachTimeoutMS bounds optional attach waiting after Online in milliseconds. Default 0 means do not block.
-	NASAttachTimeoutMS int `mapstructure:"nas_attach_timeout_ms"`
 }
 
 type DeviceConfig struct {
@@ -154,7 +148,8 @@ type DeviceConfig struct {
 	ESIMTransport      string `mapstructure:"esim_transport"` // eSIM 传输通道: at|qmi|mbim，默认 at
 	DeviceBackend      string `mapstructure:"device_backend"` // 设备后端模式: at|qmi|mbim|auto，默认 at
 	USBNetMode         *int   `mapstructure:"usbnet_mode"`    // 可选：用于校验/设置 Quectel USBNET 模式
-	// ESIMSwitch controls deterministic eSIM switch behavior. Zero values preserve current behavior.
+	// ESIMSwitch contains optional indication timing overrides. Profile refresh
+	// and the radio lifecycle are deterministic and are not configurable.
 	ESIMSwitch ESIMSwitchConfig `mapstructure:"esim_switch"`
 
 	OperatorSelectionMode string `mapstructure:"operator_selection_mode"`

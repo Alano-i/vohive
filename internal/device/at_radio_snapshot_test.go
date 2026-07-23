@@ -154,3 +154,15 @@ func TestATRadioSnapshotApplyToStatusOnlyWritesPresentFields(t *testing.T) {
 		t.Fatalf("missing radio access fields should be preserved: %+v", got)
 	}
 }
+
+func TestPreferATRegistrationStatusUsesMoreDefinitiveState(t *testing.T) {
+	if !preferATRegistrationStatus(2, 3) {
+		t.Fatal("AT denial should override QMI searching")
+	}
+	if !preferATRegistrationStatus(2, 5) {
+		t.Fatal("AT registered should override QMI searching")
+	}
+	if preferATRegistrationStatus(5, 3) {
+		t.Fatal("AT denial must not override a registered QMI state")
+	}
+}

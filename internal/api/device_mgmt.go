@@ -2352,57 +2352,6 @@ func (s *Server) handleDeviceMgmtSetFlightMode(c *gin.Context) {
 	})
 }
 
-// shouldUseATFirstReboot 判断重启时是否应优先尝试 AT+CFUN=1,1。
-// QMI 模式设备直接走 QMI ModeReset（backend.Reboot）；AT 优先路径仅保留给 AT 模式设备，
-// 原先"QMI 模式也优先走 AT"是为了规避部分模组 QMI ModeReset 假死的历史问题，
-// 现已实测确认本机型号 QMI ModeReset 正常工作，因此 QMI 模式不再绕道 AT。
-func shouldUseATFirstReboot(backendMode string) bool {
-	return backendMode != backend.BackendQMI
-}
-
-func sendWorkerReboot(ctx context.Context, worker *device.Worker, forceATFirst bool) error {
-	if worker == nil {
-		return errors.New("设备未找到")
-	}
-	rebootSent := false
-	useATFirst := forceATFirst || worker.Backend == nil || shouldUseATFirstReboot(worker.Backend.Mode())
-	tryAT := func() bool {
-		if worker.Modem == nil || !worker.Modem.HasATPort() || !worker.Modem.CanExecuteAT() {
-			return false
-		}
-		_, err := worker.Modem.ExecuteAT("AT+CFUN=1,1", 20*time.Second)
-		if err == nil {
-			return true
-		}
-		message := strings.ToLower(err.Error())
-		return strings.Contains(message, "timeout") || strings.Contains(message, "eof") ||
-			strings.Contains(message, "closed") || strings.Contains(message, "no such file")
-	}
-
-	if useATFirst {
-		rebootSent = tryAT()
-	}
-
-	var backendErr error
-	if !rebootSent && worker.Backend != nil {
-		if err := worker.Backend.Reboot(ctx); err != nil {
-			backendErr = err
-		} else {
-			rebootSent = true
-		}
-	}
-	if !rebootSent && !useATFirst {
-		rebootSent = tryAT()
-	}
-	if !rebootSent {
-		if backendErr != nil {
-			return fmt.Errorf("重启指令失败: %w", backendErr)
-		}
-		return errors.New("无法发送重启指令，无可用通道")
-	}
-	return nil
-}
-
 // handleDeviceMgmtReboot 执行模组重启 (QMI 模式走 QMI ModeReset，AT 模式走 AT+CFUN=1,1)
 func (s *Server) handleDeviceMgmtReboot(c *gin.Context) {
 	id := deviceIDParam(c)
@@ -2418,14 +2367,10 @@ func (s *Server) handleDeviceMgmtReboot(c *gin.Context) {
 		return
 	}
 
-	forceATFirst := worker.QMICore != nil && !worker.QMICore.IsControlReady()
-	if err := sendWorkerReboot(c.Request.Context(), worker, forceATFirst); err != nil {
+	if err := s.pool.RebootWorkerAndRecover(c.Request.Context(), worker, "manual_reboot"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
 		return
 	}
-
-	s.pool.MarkLifecycleRecovery(id, device.LifecyclePhaseRebooting, "manual_reboot", 3*time.Minute)
-	s.pool.ScheduleModemRebootRecovery(id, "manual_reboot")
 
 	// 因为重启后设备会脱网并暂时下线，前端仅需知道命令已送达
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "response": "重启指令已发送"})

@@ -396,19 +396,22 @@ func atRadioReadOptionsForReason(reason string) ATRadioReadOptions {
 }
 
 type runtimeStatusSample struct {
-	status        modem.DeviceStatus
-	imeiValid     bool
-	firmwareValid bool
-	signalValid   bool
-	servingValid  bool
-	simValid      bool
-	modeValid     bool
-	full          bool
+	status               modem.DeviceStatus
+	imeiValid            bool
+	firmwareValid        bool
+	signalValid          bool
+	servingValid         bool
+	atRegistrationValid  bool
+	atRegistrationStatus int
+	atRegistrationText   string
+	simValid             bool
+	modeValid            bool
+	full                 bool
 }
 
 func (s runtimeStatusSample) valid() bool {
 	return s.full || s.imeiValid || s.firmwareValid || s.signalValid ||
-		s.servingValid || s.simValid || s.modeValid
+		s.servingValid || s.atRegistrationValid || s.simValid || s.modeValid
 }
 
 func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) runtimeStatusSample {
@@ -475,6 +478,17 @@ func (w *Worker) collectRuntimeStatus(ctx context.Context, reason string) runtim
 				mu.Unlock()
 			}
 		})
+		if w.Modem != nil && w.Modem.HasATPort() && w.Modem.CanExecuteAT() {
+			call(func() {
+				if reg, text, _, _, err := w.Modem.QueryRegistration(); err == nil {
+					mu.Lock()
+					sample.atRegistrationStatus = reg
+					sample.atRegistrationText = text
+					sample.atRegistrationValid = true
+					mu.Unlock()
+				}
+			})
+		}
 		call(func() {
 			if inserted, err := w.Backend.IsSimInserted(ctx); err == nil {
 				mu.Lock()
@@ -2149,19 +2163,21 @@ func newESIMManagerForWorker(
 	}
 
 	mgr, err := esim.NewManager(esim.ManagerOptions{
-		DeviceID:             cfg.ID,
-		Transport:            resolveESIMTransport(cfg, qmiTransport != nil),
-		Modem:                w.Modem,
-		Backend:              w.Backend,
-		QMITransport:         qmiTransport,
-		OnBeforeSwitch:       beforeWithOperation,
-		OnAfterSwitch:        afterWithOperation,
-		OnSwitchFailed:       failedWithOperation,
-		OnSwitchDegraded:     degradedWithOperation,
-		OnSwitchPhase:        phaseWithOperation,
-		APDUArbiter:          w.APDUArbiter,
-		PostSwitchMinDelay:   defaultESIMPostSwitchMinDelay,
-		SwitchUseRefreshTrue: cfg.ESIMSwitch.UseRefreshTrue,
+		DeviceID:           cfg.ID,
+		Transport:          resolveESIMTransport(cfg, qmiTransport != nil),
+		Modem:              w.Modem,
+		Backend:            w.Backend,
+		QMITransport:       qmiTransport,
+		OnBeforeSwitch:     beforeWithOperation,
+		OnAfterSwitch:      afterWithOperation,
+		OnSwitchFailed:     failedWithOperation,
+		OnSwitchDegraded:   degradedWithOperation,
+		OnSwitchPhase:      phaseWithOperation,
+		APDUArbiter:        w.APDUArbiter,
+		PostSwitchMinDelay: defaultESIMPostSwitchMinDelay,
+		// Enabling a profile must refresh the terminal's UIM state. Making this
+		// optional left NAS running against state inherited from the old profile.
+		SwitchUseRefreshTrue: true,
 	})
 	if err != nil {
 		return nil, err

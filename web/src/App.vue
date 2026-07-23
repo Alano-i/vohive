@@ -31,7 +31,7 @@ function updateHtmlClass(mode: 'dark' | 'light') {
   } else {
     document.documentElement.classList.remove('dark')
   }
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mode === 'dark' ? '#080d18' : '#edf2f8')
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mode === 'dark' ? '#000000' : '#f3f4f6')
 }
 
 onMounted(() => {
@@ -199,6 +199,27 @@ const shell = computed(() =>
   max-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
+  border: 1px solid rgba(30, 30, 32, 0.1) !important;
+  background: rgba(255, 255, 255, 0.94) !important;
+  backdrop-filter: blur(35px) saturate(135%);
+  -webkit-backdrop-filter: blur(35px) saturate(135%);
+}
+
+.disclaimer-dialog > .absolute {
+  display: none;
+}
+
+html.dark .disclaimer-dialog {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(31, 31, 34, 0.96) !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .disclaimer-dialog {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 @supports (height: 100dvh) {

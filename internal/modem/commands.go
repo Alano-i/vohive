@@ -68,15 +68,49 @@ func (m *Manager) QueryOperator() (string, error) {
 }
 
 func (m *Manager) QueryRegistration() (int, string, string, string, error) {
-	resp, err := m.ExecuteATSilent("AT+CREG?", 2*time.Second)
-	if err != nil {
-		return 0, "", "", "", err
+	type registrationResult struct {
+		status int
+		lac    string
+		cellID string
+		valid  bool
+		err    error
 	}
-	regStatus, lac, cellID, ok := parseCREG(resp)
-	if !ok {
-		return 0, "", "", "", nil
+
+	var selected registrationResult
+	for _, cmd := range []string{"AT+CEREG?", "AT+CGREG?", "AT+CREG?"} {
+		resp, err := m.ExecuteATSilent(cmd, 2*time.Second)
+		if err != nil {
+			if selected.err == nil {
+				selected.err = err
+			}
+			continue
+		}
+		status, lac, cellID, ok := parseCREG(resp)
+		if !ok {
+			continue
+		}
+		candidate := registrationResult{status: status, lac: lac, cellID: cellID, valid: true}
+		if !selected.valid || registrationStatusPriority(candidate.status) > registrationStatusPriority(selected.status) {
+			selected = candidate
+		}
 	}
-	return regStatus, m.getRegStatusText(regStatus), lac, cellID, nil
+	if !selected.valid {
+		return 0, "", "", "", selected.err
+	}
+	return selected.status, m.getRegStatusText(selected.status), selected.lac, selected.cellID, nil
+}
+
+func registrationStatusPriority(status int) int {
+	switch status {
+	case 1, 5:
+		return 4
+	case 3:
+		return 3
+	case 2:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func (m *Manager) QueryCSQ() (int, int, error) {

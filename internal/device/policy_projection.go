@@ -61,30 +61,41 @@ type policyApplyResult struct {
 	Reason  string
 }
 
-// resolveAndApplyPolicy 解析 worker 当前 ICCID 的策略，投影并复用现有 apply 路径。
-func (p *Pool) resolveAndApplyPolicy(worker *Worker, reason string) policyApplyResult {
+// resolveAndProjectPolicy resolves the current SIM policy and updates only the
+// worker's effective configuration. Keeping projection free of modem I/O lets
+// callers decide whether runtime application must be synchronous or deferred.
+func (p *Pool) resolveAndProjectPolicy(worker *Worker, reason string) (policyApplyResult, cardpolicy.Policy) {
 	if p == nil || worker == nil || p.policyResolver == nil {
-		return policyApplyResult{}
+		return policyApplyResult{}, cardpolicy.Policy{}
 	}
 	iccid := worker.CurrentICCID()
 	if iccid == "" {
 		logger.Info("跳过策略投影：ICCID 未就绪", "device", worker.ID, "reason", reason)
-		return policyApplyResult{Reason: "iccid_empty"}
+		return policyApplyResult{Reason: "iccid_empty"}, cardpolicy.Policy{}
 	}
 	pol, err := p.policyResolver.Resolve(iccid)
 	if err != nil {
 		logger.Warn("解析卡策略失败", "device", worker.ID, "iccid", iccid, "err", err)
-		return policyApplyResult{ICCID: iccid, Reason: "resolve_failed"}
+		return policyApplyResult{ICCID: iccid, Reason: "resolve_failed"}, cardpolicy.Policy{}
 	}
 	applyPolicyToWorker(worker, pol)
 	if err := syncWorkerPolicyDataConfig(worker); err != nil {
 		logger.Warn("同步卡策略到底层数据配置失败", "device", worker.ID, "iccid", iccid, "err", err)
-		return policyApplyResult{ICCID: iccid, Reason: "data_config_sync_failed"}
+		return policyApplyResult{ICCID: iccid, Reason: "data_config_sync_failed"}, pol
 	}
 	logger.Info("已投影卡策略", "device", worker.ID, "iccid", iccid,
 		"network", pol.NetworkEnabled, "vowifi", pol.VoWiFiEnabled,
 		"airplane", worker.ConfigSnapshot().AirplaneEnabled, "reason", reason)
+	return policyApplyResult{Applied: true, ICCID: iccid, Reason: reason}, pol
+}
 
+// applyProjectedPolicyRuntime performs the modem I/O for an already projected
+// policy. It is intentionally separate from resolution so eSIM switching can
+// finish its identity transaction before starting a potentially slow attach.
+func (p *Pool) applyProjectedPolicyRuntime(worker *Worker, pol cardpolicy.Policy, reason string) {
+	if p == nil || worker == nil {
+		return
+	}
 	// 三态分支：VoWiFi / 纯飞行 / 在线(含连网)。射频模式按策略真正切换，
 	// 补齐此前“airplane 字段被投影但从不执行”的缺口。
 	switch {
@@ -108,7 +119,15 @@ func (p *Pool) resolveAndApplyPolicy(worker *Worker, reason string) policyApplyR
 	} else {
 		p.clearDesiredVoWiFiRecoverState(worker.ID)
 	}
-	return policyApplyResult{Applied: true, ICCID: iccid, Reason: reason}
+}
+
+// resolveAndApplyPolicy is the synchronous path used outside eSIM switching.
+func (p *Pool) resolveAndApplyPolicy(worker *Worker, reason string) policyApplyResult {
+	result, pol := p.resolveAndProjectPolicy(worker, reason)
+	if result.Applied {
+		p.applyProjectedPolicyRuntime(worker, pol, reason)
+	}
+	return result
 }
 
 // enterAirplaneModeFromPolicy 按策略进入纯飞行：先断数据网，再把射频切到 RFOff。

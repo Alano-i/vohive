@@ -51,6 +51,31 @@ func TestDefaultModemRebootRecoveryStartsWithImmediateAttempt(t *testing.T) {
 	}
 }
 
+func TestESIMSwitchRebootRecoveryWaitsForOldUSBWorkerToDisappear(t *testing.T) {
+	delays := commandedRebootRecoveryDelays("esim_switch")
+	if len(delays) == 0 || delays[0] != 2*time.Second {
+		t.Fatalf("delays = %v, want first delay 2s", delays)
+	}
+}
+
+func TestRebootWorkerAndRecoverSuppressesDuplicateReset(t *testing.T) {
+	p := NewPool(&config.Config{})
+	defer p.cancel()
+	be := &esimSwitchRestoreBackendStub{mode: backend.BackendQMI}
+	w := &Worker{ID: "dev-1", Backend: be}
+	p.workers[w.ID] = w
+
+	if err := p.RebootWorkerAndRecover(nil, w, "esim_switch"); err != nil {
+		t.Fatalf("first reboot: %v", err)
+	}
+	if err := p.RebootWorkerAndRecover(nil, w, "esim_switch"); err == nil {
+		t.Fatal("duplicate reboot unexpectedly succeeded")
+	}
+	if be.rebootCalls != 1 {
+		t.Fatalf("reboot calls=%d want=1", be.rebootCalls)
+	}
+}
+
 func TestModemRebootRecoverySuppressesDuplicateDeviceRecovery(t *testing.T) {
 	p := NewPool(&config.Config{})
 	if !p.beginModemRebootRecovery("dev-1") {

@@ -279,7 +279,7 @@ onMounted(() => {
 
          <div v-if="loadingNotifications" class="p-6 text-sm text-gray-500 dark:text-gray-400">正在加载通知配置…</div>
 
-         <div v-else class="relative z-10 w-full overflow-hidden">
+         <div v-else class="relative z-10 w-full">
             <el-tabs v-model="activeNotifyTab" class="settings-notify-tabs">
               <!-- 企业微信应用 -->
               <el-tab-pane label="企业微信应用" name="wecom" class="pt-2">
@@ -831,6 +831,9 @@ onMounted(() => {
 :deep(.settings-notify-tabs) {
   border: none;
   background: transparent;
+}
+:deep(.settings-notify-tabs .el-tabs__content) {
+  overflow: visible;
 }
 :deep(.settings-notify-tabs .el-tabs__header) {
   margin-bottom: 24px;

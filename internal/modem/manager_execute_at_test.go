@@ -446,6 +446,105 @@ func TestManagerIsURCTreatsCGLAAsSynchronousResponse(t *testing.T) {
 	}
 }
 
+func TestIsSolicitedRegistrationResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+		line string
+		want bool
+	}{
+		{name: "CREG", cmd: "AT+CREG?", line: "+CREG: 0,5", want: true},
+		{name: "CGREG", cmd: "AT+CGREG?", line: "+CGREG: 0,5", want: true},
+		{name: "CEREG", cmd: "AT+CEREG?", line: "+CEREG: 0,5", want: true},
+		{name: "case and whitespace", cmd: " at+cereg? ", line: " +cereg: 0,5 ", want: true},
+		{name: "different command", cmd: "AT+CSQ", line: "+CEREG: 5", want: false},
+		{name: "different domain", cmd: "AT+CREG?", line: "+CGREG: 5", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSolicitedRegistrationResponse(tt.cmd, tt.line); got != tt.want {
+				t.Fatalf("isSolicitedRegistrationResponse(%q, %q) = %v, want %v", tt.cmd, tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleCommandKeepsRegistrationQueryResponseOutOfURCState(t *testing.T) {
+	m, err := New(config.DeviceConfig{ID: "dev-at", ATPort: "/dev/ttyUSB6", DeviceBackend: "at"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	m.port = &timeoutSerialPort{}
+	m.running = true
+	m.healthy = true
+	m.rxChan <- rxMsg{Data: "+CEREG: 0,5"}
+	m.rxChan <- rxMsg{Data: "OK"}
+
+	req := commandRequest{
+		cmd:      "AT+CEREG?",
+		timeout:  time.Second,
+		respChan: make(chan string, 1),
+		errChan:  make(chan error, 1),
+	}
+	m.handleCommand(req)
+
+	if got := <-req.respChan; got != "+CEREG: 0,5" {
+		t.Fatalf("response = %q, want +CEREG: 0,5", got)
+	}
+	if len(m.registrationURCState) != 0 {
+		t.Fatalf("registration URC state = %#v, want empty for solicited response", m.registrationURCState)
+	}
+}
+
+func TestHandleCommandDispatchesAsyncRegistrationWithoutPollutingResponse(t *testing.T) {
+	m, err := New(config.DeviceConfig{ID: "dev-at", ATPort: "/dev/ttyUSB6", DeviceBackend: "at"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	m.port = &timeoutSerialPort{}
+	m.running = true
+	m.healthy = true
+	m.rxChan <- rxMsg{Data: "+CEREG: 5"}
+	m.rxChan <- rxMsg{Data: "+CSQ: 20,99"}
+	m.rxChan <- rxMsg{Data: "OK"}
+
+	req := commandRequest{
+		cmd:      "AT+CSQ",
+		timeout:  time.Second,
+		respChan: make(chan string, 1),
+		errChan:  make(chan error, 1),
+	}
+	m.handleCommand(req)
+
+	if got := <-req.respChan; got != "+CSQ: 20,99" {
+		t.Fatalf("response = %q, want only the solicited CSQ response", got)
+	}
+	if got := m.registrationURCState["CEREG"]; got != 5 {
+		t.Fatalf("CEREG URC state = %d, want 5", got)
+	}
+}
+
+func TestRegistrationURCStateDeduplication(t *testing.T) {
+	m, err := New(config.DeviceConfig{ID: "dev-at", ATPort: "/dev/ttyUSB6", DeviceBackend: "at"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if !m.shouldLogRegistrationURC("+CEREG: 2") {
+		t.Fatal("first registration URC should be logged")
+	}
+	if m.shouldLogRegistrationURC("+CEREG: 2") {
+		t.Fatal("unchanged registration URC should be suppressed")
+	}
+	if !m.shouldLogRegistrationURC("+CEREG: 5") {
+		t.Fatal("changed registration URC should be logged")
+	}
+	if !m.shouldLogRegistrationURC("+CREG: 5") {
+		t.Fatal("first URC for a different registration domain should be logged")
+	}
+}
+
 func TestManagerExecuteATReturnsResponseWhenRunning(t *testing.T) {
 	m, err := New(config.DeviceConfig{
 		ID:            "dev-at",

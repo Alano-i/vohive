@@ -57,7 +57,7 @@ function showBootError(err: unknown, opts: { force?: boolean } = {}) {
       el.style.inset = '0'
       el.style.zIndex = '99999'
       el.style.background = 'rgba(15, 23, 42, 0.92)'
-      el.style.color = '#e2e8f0'
+      el.style.color = 'var(--vh-dark-text-primary)'
       el.style.padding = '24px'
       el.style.fontFamily =
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
@@ -66,8 +66,8 @@ function showBootError(err: unknown, opts: { force?: boolean } = {}) {
   <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom: 12px;">
     <div style="font-weight: 800; font-size: 18px;">前端异常（Boot Error）</div>
     <div style="display:flex; gap:10px;">
-      <button data-action="continue" style="cursor:pointer; border:1px solid rgba(148,163,184,0.25); background: rgba(2, 6, 23, 0.25); color:#e2e8f0; padding:8px 12px; border-radius:10px;">继续使用</button>
-      <button data-action="reload" style="cursor:pointer; border:1px solid rgba(148,163,184,0.25); background: rgba(79, 70, 229, 0.25); color:#e2e8f0; padding:8px 12px; border-radius:10px;">刷新页面</button>
+      <button data-action="continue" style="cursor:pointer; border:1px solid rgba(148,163,184,0.25); background: rgba(2, 6, 23, 0.25); color:var(--vh-dark-text-primary); padding:8px 12px; border-radius:10px;">继续使用</button>
+      <button data-action="reload" style="cursor:pointer; border:1px solid rgba(148,163,184,0.25); background: rgba(79, 70, 229, 0.25); color:var(--vh-dark-text-primary); padding:8px 12px; border-radius:10px;">刷新页面</button>
     </div>
   </div>
   <div style="opacity: 0.8; margin-bottom: 14px;">建议先尝试刷新；如果仍失败，请把下面内容截图发我（用于定位原因）</div>

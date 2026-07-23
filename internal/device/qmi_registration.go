@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,9 +25,7 @@ var (
 const (
 	qmiRegistrationForceSearchAfterTries                = 2
 	qmiRegistrationUnregisteredRadioCycleAfterTries     = 30
-	qmiRegistrationSearchingRadioCycleAfterTries        = 150
-	qmiRegistrationPostRadioCycleGraceTries             = 30
-	qmiRegistrationDefaultMaxAttempts                   = qmiRegistrationSearchingRadioCycleAfterTries + qmiRegistrationPostRadioCycleGraceTries
+	qmiRegistrationDefaultMaxAttempts                   = 180
 	qmiRegistrationUnsupportedForceRadioCycleAfterTries = 3
 
 	// qmiRegistrationTimeoutDataRequired 用于数据网络必须就绪的协调路径（如 StartNetwork），
@@ -68,6 +67,8 @@ type qmiRegistrationController interface {
 type qmiRegistrationOptions struct {
 	PollInterval       time.Duration
 	MaxAttempts        int
+	RegistrationOnly   bool
+	ATRegistration     func() (int, string, bool)
 	SuppressRadioCycle func() bool
 }
 
@@ -139,11 +140,25 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 		if ss == nil {
 			return fmt.Errorf("读取 QMI serving system 返回空结果")
 		}
+		if ss.RegStatus != 1 && ss.RegStatus != 5 && opts.ATRegistration != nil && attempt%5 == 0 {
+			if atStatus, atText, ok := opts.ATRegistration(); ok {
+				switch atStatus {
+				case 1, 5:
+					if opts.RegistrationOnly {
+						logger.Info("QMI 与 AT 驻网状态不一致，采用 AT 已注册状态结束协调",
+							"device", deviceID, "qmi_reg_status", ss.RegStatus, "at_reg_status", atStatus)
+						return nil
+					}
+				case 3:
+					return fmt.Errorf("%w: %s", errQMIRegistrationDenied, atText)
+				}
+			}
+		}
 
 		needsRegistrationRecovery := false
 		switch ss.RegStatus {
 		case 1, 5:
-			if ss.PSAttached {
+			if ss.PSAttached || opts.RegistrationOnly {
 				logger.Debug("QMI 驻网协调完成", "device", deviceID, "attempt", attempt, "elapsed_ms", time.Since(startedAt).Milliseconds(), "reg_status", ss.RegStatus, "radio_cycle_used", radioCycleIssued, "force_network_search_unsupported", forceNetworkSearchUnsupported)
 				return nil
 			}
@@ -155,13 +170,17 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 				attachIssued = true
 			}
 		case 2:
-			needsRegistrationRecovery = true
-			if !registerIssued {
-				logger.Info("QMI 正在搜网，发起 NAS 注册唤醒", "device", deviceID, "attempt", attempt)
-				if err := initiateQMIRegistration(ctx, deviceID, cfg, ctrl); err != nil {
-					return fmt.Errorf("QMI NAS 注册失败: %w", err)
+			// Searching is an active modem state. Reissuing registration, force-search
+			// or an RF cycle restarts PLMN selection and can indefinitely delay roaming.
+			// Leave the modem alone until it registers or reports a terminal state.
+			if cfg.OperatorSelectionMode == "manual" && strings.TrimSpace(cfg.OperatorSelectionPLMN) != "" {
+				needsRegistrationRecovery = true
+				if !registerIssued {
+					if err := initiateQMIRegistration(ctx, deviceID, cfg, ctrl); err != nil {
+						return fmt.Errorf("QMI NAS 手动注册失败: %w", err)
+					}
+					registerIssued = true
 				}
-				registerIssued = true
 			}
 		case 3:
 			return fmt.Errorf("%w: %s", errQMIRegistrationDenied, ss.RegStatusText)
@@ -176,8 +195,8 @@ func ensureQMIRegistration(ctx context.Context, deviceID string, cfg config.Devi
 			}
 		}
 
-		// NAS 可能在切卡后从“搜索中(2)”退回“未注册(0)”。两种状态都必须继续
-		// 进入 force-search/radio-cycle 恢复链路，不能在 reg_status=0 时只空等。
+		// 仅明确未注册或手动选网时进入恢复链路。自动选网的搜索中状态保持被动，
+		// 避免重复命令重启模组正在进行的 PLMN 搜索。
 		if needsRegistrationRecovery {
 			if shouldForceNetworkSearchForQMIRegistration(attempt, registerIssued, forceNetworkSearchIssued, forceNetworkSearchUnsupported) {
 				forceNetworkSearchIssued = true
@@ -276,26 +295,13 @@ func shouldForceNetworkSearchForQMIRegistration(attempt int, registerIssued bool
 }
 
 func shouldRadioCycleForQMIRegistration(attempt int, regStatus int, registerIssued bool, radioCycleIssued bool, forceNetworkSearchUnsupported bool, radioRestoredOnline bool) bool {
-	if !registerIssued || radioCycleIssued {
+	if !registerIssued || radioCycleIssued || regStatus == 2 {
 		return false
 	}
-	if radioRestoredOnline {
-		return attempt >= qmiRegistrationRadioCycleThreshold(regStatus)
-	}
-	if forceNetworkSearchUnsupported {
+	if forceNetworkSearchUnsupported && !radioRestoredOnline {
 		return attempt >= qmiRegistrationUnsupportedForceRadioCycleAfterTries
 	}
-	return attempt >= qmiRegistrationRadioCycleThreshold(regStatus)
-}
-
-func qmiRegistrationRadioCycleThreshold(regStatus int) int {
-	if regStatus == 2 {
-		// Searching is an active, healthy modem state. International roaming may
-		// legitimately remain here for several minutes; cycling RF too early
-		// restarts PLMN search and delays registration further.
-		return qmiRegistrationSearchingRadioCycleAfterTries
-	}
-	return qmiRegistrationUnregisteredRadioCycleAfterTries
+	return attempt >= qmiRegistrationUnregisteredRadioCycleAfterTries
 }
 
 func radioCycleQMIForRegistration(ctx context.Context, deviceID string, ctrl qmiRegistrationController, wait time.Duration) error {
@@ -423,9 +429,20 @@ func (w *Worker) ensureQMIRegistration(ctx context.Context, requiredForData bool
 	ctx, cancel := context.WithTimeout(ctx, qmiRegistrationTimeout(requiredForData))
 	defer cancel()
 
-	return ensureQMIRegistration(ctx, w.ID, w.ConfigSnapshot(), w.QMICore, ctrl, qmiRegistrationOptions{
+	opts := qmiRegistrationOptions{
+		RegistrationOnly:   !requiredForData,
 		SuppressRadioCycle: w.IsOperatorScanActive,
-	})
+	}
+	if w.Modem != nil && w.Modem.HasATPort() {
+		opts.ATRegistration = func() (int, string, bool) {
+			if !w.Modem.CanExecuteAT() {
+				return 0, "", false
+			}
+			status, text, _, _, err := w.Modem.QueryRegistration()
+			return status, text, err == nil
+		}
+	}
+	return ensureQMIRegistration(ctx, w.ID, w.ConfigSnapshot(), w.QMICore, ctrl, opts)
 }
 
 func (w *Worker) StartQMIRegistrationReconcile(ctx context.Context, reason string) bool {
@@ -438,6 +455,32 @@ func (w *Worker) StartQMIRegistrationReconcile(ctx context.Context, reason strin
 		}
 		return nil
 	})
+}
+
+// ReconcileIdleQMIRegistration wakes a SIM that is healthy at the control
+// layer but remains unregistered after a previous best-effort attempt ended.
+// It deliberately excludes data-enabled, airplane and VoWiFi policies; those
+// lifecycles have their own coordinators.
+func (w *Worker) ReconcileIdleQMIRegistration(ctx context.Context, reason string) bool {
+	if w == nil || w.QMICore == nil || w.Backend == nil {
+		return false
+	}
+	cfg := w.ConfigSnapshot()
+	if cfg.NetworkEnabled || cfg.AirplaneEnabled || cfg.VoWiFiEnabled {
+		return false
+	}
+	if w.Pool != nil && (w.Pool.IsESIMSwitching(w.ID) || w.Pool.IsVoWiFiActive(w.ID)) {
+		return false
+	}
+	status := w.GetCachedDeviceStatus()
+	if !status.SimInserted && strings.TrimSpace(status.ICCID) == "" {
+		return false
+	}
+	switch status.RegStatus {
+	case 1, 3, 5:
+		return false
+	}
+	return w.StartQMIRegistrationReconcile(ctx, reason)
 }
 
 func (w *Worker) startQMIRegistrationReconcile(ctx context.Context, reason string, run func(context.Context) error) bool {

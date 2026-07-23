@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestRegistrationStatusPriority(t *testing.T) {
+	if registrationStatusPriority(5) <= registrationStatusPriority(3) {
+		t.Fatal("registered status must outrank denied")
+	}
+	if registrationStatusPriority(3) <= registrationStatusPriority(2) {
+		t.Fatal("denied status must outrank searching")
+	}
+	if registrationStatusPriority(2) <= registrationStatusPriority(0) {
+		t.Fatal("searching status must outrank unregistered")
+	}
+}
+
 func TestParseServingCellLTE(t *testing.T) {
 	tests := []struct {
 		name     string

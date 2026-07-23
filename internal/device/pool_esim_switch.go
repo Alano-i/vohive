@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/iniwex5/vohive/internal/backend"
+	"github.com/iniwex5/vohive/internal/cardpolicy"
+	"github.com/iniwex5/vohive/internal/config"
 	"github.com/iniwex5/vohive/internal/esim"
 	"github.com/iniwex5/vohive/pkg/logger"
 )
@@ -314,40 +316,25 @@ func releaseRadioBeforeSwitch(deviceID string, worker *Worker) {
 		"mode", backend.ModeLowPower)
 }
 
-func (p *Pool) bringRadioOnlineAfterSwitch(deviceID string, worker *Worker, snapshot esimSwitchContext, attachTimeout time.Duration) {
+func (p *Pool) bringRadioOnlineAfterSwitch(deviceID string, worker *Worker) error {
 	if worker == nil || worker.Backend == nil {
-		return
+		return fmt.Errorf("worker 或 backend 不可用")
 	}
 	controller, ok := worker.Backend.(backend.OperatingModeController)
 	if !ok {
-		return
+		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	err := controller.SetOperatingMode(ctx, backend.ModeOnline)
+	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	mode, probeErr := controller.GetOperatingMode(probeCtx)
 	cancel()
-	if err != nil {
-		logger.Warn("eSIM 切卡后恢复 radio 在线失败，继续后续收敛",
-			"device", deviceID,
-			"err", err)
-		return
-	} else {
-		logger.Info("eSIM 切卡后已恢复 radio 在线",
-			"device", deviceID,
-			"mode", backend.ModeOnline)
+	if probeErr == nil && mode == backend.ModeOnline {
+		return nil
 	}
-	if attachTimeout <= 0 {
-		return
+	if err := p.setOperatingModeWithRetry(worker, backend.ModeOnline); err != nil {
+		return fmt.Errorf("恢复 radio Online 失败: %w", err)
 	}
-	if err := p.WaitQMICoreReady(deviceID, attachTimeout); err != nil {
-		logger.Warn("eSIM 切卡后等待 NAS attach/身份就绪超时，继续后续收敛",
-			"device", deviceID,
-			"timeout", attachTimeout.String(),
-			"err", err)
-		return
-	}
-	logger.Info("eSIM 切卡后 NAS attach/身份已就绪",
-		"device", deviceID,
-		"timeout", attachTimeout.String())
+	logger.Info("eSIM 切卡后已恢复 radio 在线", "device", deviceID, "mode", backend.ModeOnline)
+	return nil
 }
 
 func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint64 {
@@ -395,16 +382,17 @@ func (p *Pool) handleESIMSwitchBefore(deviceID string, targetICCID string) uint6
 		}
 	}
 	if worker := p.GetWorker(deviceID); worker != nil && worker.QMICore != nil {
-		if worker.ConfigSnapshot().ESIMSwitch.RadioCycle {
-			releaseRadioBeforeSwitch(deviceID, worker)
-		}
+		// Profile switching always owns a deterministic radio lifecycle. Leaving
+		// this optional caused the new SIM identity to become visible while NAS
+		// continued searching with state inherited from the previous profile.
+		releaseRadioBeforeSwitch(deviceID, worker)
 		worker.QMICore.ReleaseAPDULeasesForSwitchTeardown()
 		// 切卡前主动清空 DeviceSnapshot 中缓存的 ICCID/IMSI，
 		// 防止切卡后其他代码路径从 Snapshot 读到旧卡身份。
 		if snap := worker.QMICore.GetDeviceSnapshot(); snap != nil {
 			snap.ResetIdentities(false)
 		}
-	} else if worker := p.GetWorker(deviceID); worker != nil && worker.ConfigSnapshot().ESIMSwitch.RadioCycle {
+	} else if worker := p.GetWorker(deviceID); worker != nil {
 		releaseRadioBeforeSwitch(deviceID, worker)
 	}
 	return snapshot.SwitchToken
@@ -722,20 +710,95 @@ func (p *Pool) refreshPostSwitchRuntime(deviceID string, worker *Worker) int64 {
 	return time.Since(start).Milliseconds()
 }
 
-func (p *Pool) applyConfirmedTargetProfilePolicy(worker *Worker, reason string) policyApplyResult {
+func (p *Pool) projectConfirmedTargetProfilePolicy(worker *Worker, reason string) (policyApplyResult, cardpolicy.Policy) {
 	if p == nil || worker == nil {
-		return policyApplyResult{Reason: "worker_unavailable"}
+		return policyApplyResult{Reason: "worker_unavailable"}, cardpolicy.Policy{}
 	}
 	// The main service always injects the DB-backed resolver. Keep Pool usable
 	// for embedded/test callers that intentionally run without persistence.
 	if p.policyResolver == nil {
+		cfg := worker.ConfigSnapshot()
 		return policyApplyResult{
-			Applied: true,
-			ICCID:   worker.CurrentICCID(),
-			Reason:  "resolver_unavailable_keep_runtime",
+				Applied: true,
+				ICCID:   worker.CurrentICCID(),
+				Reason:  "resolver_unavailable_keep_runtime",
+			}, cardpolicy.Policy{
+				NetworkEnabled:  cfg.NetworkEnabled,
+				VoWiFiEnabled:   cfg.VoWiFiEnabled,
+				AirplaneEnabled: cfg.AirplaneEnabled,
+				APN:             cfg.APN,
+				IPVersion:       cfg.IPVersion,
+			}
+	}
+	return p.resolveAndProjectPolicy(worker, reason)
+}
+
+func (p *Pool) preparePostSwitchRuntime(worker *Worker, reason string) {
+	if p == nil || worker == nil {
+		return
+	}
+	// Operator selection is modem-scoped, not profile-scoped. Never carry a
+	// manual PLMN from the previous profile into registration for the target SIM.
+	worker.updateConfig(func(cfg *config.DeviceConfig) {
+		cfg.OperatorSelectionMode = string(backend.OperatorSelectionAutomatic)
+		cfg.OperatorSelectionPLMN = ""
+		cfg.OperatorSelectionRAT = ""
+	})
+	if nc := worker.NetworkController(); nc != nil && nc.IsConnected() {
+		if err := worker.StopNetwork(); err != nil {
+			logger.Warn("切卡后清理旧数据连接失败", "device", worker.ID, "reason", reason, "err", err)
 		}
 	}
-	return p.resolveAndApplyPolicy(worker, reason)
+	worker.clearCachedIP()
+}
+
+// applyPostSwitchPolicyRuntime applies the already projected target policy
+// without holding the eSIM transaction open while NAS registration or data
+// setup waits on a roaming network.
+func (p *Pool) applyPostSwitchPolicyRuntime(worker *Worker, snapshot esimSwitchContext, reason string) {
+	if p == nil || worker == nil {
+		return
+	}
+	p.preparePostSwitchRuntime(worker, reason)
+	cfg := worker.ConfigSnapshot()
+	if cfg.VoWiFiEnabled {
+		return
+	}
+	if cfg.AirplaneEnabled {
+		p.enterAirplaneModeFromPolicy(worker, reason)
+		p.clearDesiredVoWiFiRecoverState(worker.ID)
+		return
+	}
+
+	p.exitAirplaneModeIfNeeded(worker, reason)
+	p.clearDesiredVoWiFiRecoverState(worker.ID)
+	if !cfg.NetworkEnabled {
+		if nc := worker.NetworkController(); nc != nil && nc.IsConnected() {
+			if err := worker.StopNetwork(); err != nil {
+				logger.Warn("切卡后按目标策略停止数据连接失败", "device", worker.ID, "reason", reason, "err", err)
+			}
+		}
+		worker.clearCachedIP()
+		worker.StartQMIRegistrationReconcile(p.ctx, "post_esim_switch")
+		return
+	}
+
+	targetICCID := snapshot.TargetICCID
+	identityGeneration := snapshot.IdentityGeneration
+	go func(expectedWorker *Worker) {
+		if !p.isCurrentWorker(expectedWorker) ||
+			!expectedWorker.SIMIdentityActiveMatches(targetICCID, identityGeneration) {
+			return
+		}
+		if err := p.applyNetworkPreference(expectedWorker); err != nil {
+			logger.Warn("切卡后目标 Profile 数据网络恢复失败",
+				"device", expectedWorker.ID,
+				"target_iccid", targetICCID,
+				"reason", reason,
+				"err", err)
+			p.ScheduleNetworkControlRecovery(expectedWorker, "post_esim_switch_network")
+		}
+	}(worker)
 }
 
 func (p *Pool) schedulePostSwitchIdentityRefreshes(deviceID string, snapshot esimSwitchContext, policyAlreadyApplied bool) {
@@ -777,7 +840,7 @@ func (p *Pool) schedulePostSwitchIdentityRefreshes(deviceID string, snapshot esi
 				return
 			}
 			if !policyApplied {
-				result := p.applyConfirmedTargetProfilePolicy(worker, "post_switch_deferred_policy")
+				result, pol := p.projectConfirmedTargetProfilePolicy(worker, "post_switch_deferred_policy")
 				if !result.Applied {
 					logger.Warn("切卡后延迟应用目标 Profile 策略失败",
 						"device", deviceID,
@@ -786,6 +849,7 @@ func (p *Pool) schedulePostSwitchIdentityRefreshes(deviceID string, snapshot esi
 					continue
 				}
 				policyApplied = true
+				go p.applyProjectedPolicyRuntime(worker, pol, "post_switch_deferred_policy")
 				p.broadcastVoWiFiStateChange(deviceID)
 			}
 			if worker.SIMOperatorMetadataReady(snapshot.TargetICCID, snapshot.IdentityGeneration) {
@@ -1208,13 +1272,15 @@ func (p *Pool) handleESIMSwitchAfter(deviceID string, token uint64) {
 		return
 	}
 
-	switchCfg := worker.ConfigSnapshot().ESIMSwitch
-	if switchCfg.RadioCycle {
-		attachTimeout := time.Duration(switchCfg.NASAttachTimeoutMS) * time.Millisecond
-		p.bringRadioOnlineAfterSwitch(deviceID, worker, snapshot, attachTimeout)
-		if !p.switchTokenStillCurrent(deviceID, token, "radio_online") {
-			return
-		}
+	if err := p.bringRadioOnlineAfterSwitch(deviceID, worker); err != nil {
+		p.markESIMSwitchPhaseIfToken(deviceID, token, esim.SwitchPhaseDegraded)
+		p.schedulePostSwitchIdentityRefreshes(deviceID, snapshot, false)
+		p.holdPostSwitchSafeState(deviceID, worker, "radio_online_failed")
+		logger.Warn("eSIM 切卡后 radio 未恢复，停止本次收尾", "device", deviceID, "err", err)
+		return
+	}
+	if !p.switchTokenStillCurrent(deviceID, token, "radio_online") {
+		return
 	}
 
 	p.markESIMSwitchPhaseIfToken(deviceID, token, esim.SwitchPhaseIdentityRefresh)
@@ -1244,13 +1310,37 @@ func (p *Pool) handleESIMSwitchAfter(deviceID string, token uint64) {
 		p.holdPostSwitchSafeState(deviceID, worker, identityRefreshErr.Error())
 		return
 	}
-	policyResult := p.applyConfirmedTargetProfilePolicy(worker, "esim_switched")
+	policyResult, _ := p.projectConfirmedTargetProfilePolicy(worker, "esim_switched")
 	if !policyResult.Applied {
 		p.markESIMSwitchPhaseIfToken(deviceID, token, esim.SwitchPhaseDegraded)
 		p.schedulePostSwitchIdentityRefreshes(deviceID, snapshot, false)
 		p.holdPostSwitchSafeState(deviceID, worker, "target_policy_"+policyResult.Reason)
 		return
 	}
+	if strings.TrimSpace(snapshot.TargetICCID) != "" {
+		// This modem firmware does not reliably rebuild NAS state after an eSTK
+		// profile change with UIM refresh and RF cycling alone. A full reset is
+		// required; the existing IMEI-bound recovery coordinator restores the
+		// worker and reapplies the confirmed target card policy afterwards.
+		if err := p.voWiFiHost().SwitchEnd(context.Background(), deviceID, false); err != nil {
+			logger.Warn("切卡后模组重启前结束 VoWiFi 切换态失败", "device", deviceID, "err", err)
+		}
+		p.preparePostSwitchRuntime(worker, "esim_switch_reboot")
+		if err := p.RebootWorkerAndRecover(context.Background(), worker, "esim_switch"); err == nil {
+			logger.Info("eSIM Profile 已切换，已提交模组重启并进入统一恢复流程",
+				"device", deviceID,
+				"target_iccid", snapshot.TargetICCID,
+				"switch_token", token)
+			finalizeOK = true
+			return
+		} else {
+			logger.Warn("eSIM 切卡后提交模组重启失败，降级为射频驻网恢复",
+				"device", deviceID,
+				"target_iccid", snapshot.TargetICCID,
+				"err", err)
+		}
+	}
+	p.applyPostSwitchPolicyRuntime(worker, snapshot, "esim_switched")
 	p.schedulePostSwitchIdentityRefreshes(deviceID, snapshot, true)
 	var restoreGateErr error
 	if worker.ConfigSnapshot().VoWiFiEnabled {

@@ -460,13 +460,8 @@ func TestHandleESIMSwitchBeforeRadioCycleReleasesRadioAfterSwitchBegin(t *testin
 		},
 	}
 	w := &Worker{
-		ID: "dev-1",
-		Config: config.DeviceConfig{
-			ID: "dev-1",
-			ESIMSwitch: config.ESIMSwitchConfig{
-				RadioCycle: true,
-			},
-		},
+		ID:      "dev-1",
+		Config:  config.DeviceConfig{ID: "dev-1"},
 		Backend: be,
 	}
 	p.workers["dev-1"] = w
@@ -533,9 +528,6 @@ func TestHandleESIMSwitchAfterRadioCycleDoesNotRestoreOldFlightSnapshot(t *testi
 			ID:             "dev-1",
 			VoWiFiEnabled:  false,
 			NetworkEnabled: true,
-			ESIMSwitch: config.ESIMSwitchConfig{
-				RadioCycle: true,
-			},
 		},
 		Backend: be,
 	}
@@ -546,7 +538,7 @@ func TestHandleESIMSwitchAfterRadioCycleDoesNotRestoreOldFlightSnapshot(t *testi
 
 	p.handleESIMSwitchAfter("dev-1", 0)
 
-	want := []backend.OperatingMode{backend.ModeOnline}
+	var want []backend.OperatingMode
 	if !reflect.DeepEqual(be.setCalls, want) {
 		t.Fatalf("setCalls=%v want %v", be.setCalls, want)
 	}
@@ -1072,7 +1064,7 @@ func TestHandleESIMSwitchAfterKeepsTargetRuntimeWhenAlreadyOnline(t *testing.T) 
 
 func TestHandleESIMSwitchAfterUsesTargetPolicyInsteadOfOldNetworkSnapshot(t *testing.T) {
 	p := NewPool(&config.Config{})
-	defer p.cancel()
+	p.cancel()
 	p.SetPolicyResolver(&stubPolicyResolver{pol: cardpolicy.Policy{
 		ICCID: "target-iccid", NetworkEnabled: false, IPVersion: "v4", APN: "target.apn",
 	}})
@@ -1082,7 +1074,14 @@ func TestHandleESIMSwitchAfterUsesTargetPolicyInsteadOfOldNetworkSnapshot(t *tes
 	}
 	network := &fakeController{connected: true}
 	w := &Worker{
-		ID: "dev-1", Config: config.DeviceConfig{ID: "dev-1", NetworkEnabled: true, APN: "old.apn"},
+		ID: "dev-1", Config: config.DeviceConfig{
+			ID:                    "dev-1",
+			NetworkEnabled:        true,
+			APN:                   "old.apn",
+			OperatorSelectionMode: "manual",
+			OperatorSelectionPLMN: "62130",
+			OperatorSelectionRAT:  "lte",
+		},
 		Backend: be, netOverride: network,
 	}
 	p.workers["dev-1"] = w
@@ -1092,6 +1091,9 @@ func TestHandleESIMSwitchAfterUsesTargetPolicyInsteadOfOldNetworkSnapshot(t *tes
 
 	p.handleESIMSwitchAfter("dev-1", 0)
 
+	if be.rebootCalls != 1 {
+		t.Fatalf("rebootCalls=%d want 1", be.rebootCalls)
+	}
 	if network.connected {
 		t.Fatal("target policy disables network; old connected snapshot must not reconnect it")
 	}
@@ -1102,11 +1104,14 @@ func TestHandleESIMSwitchAfterUsesTargetPolicyInsteadOfOldNetworkSnapshot(t *tes
 	if cfg.APN != "target.apn" {
 		t.Fatalf("APN=%q want target.apn", cfg.APN)
 	}
+	if cfg.OperatorSelectionMode != string(backend.OperatorSelectionAutomatic) || cfg.OperatorSelectionPLMN != "" || cfg.OperatorSelectionRAT != "" {
+		t.Fatalf("old profile operator selection leaked into target profile: %+v", cfg)
+	}
 }
 
 func TestHandleESIMSwitchAfterConnectsUsingTargetProfilePolicy(t *testing.T) {
 	p := NewPool(&config.Config{})
-	defer p.cancel()
+	p.cancel()
 	p.SetPolicyResolver(&stubPolicyResolver{pol: cardpolicy.Policy{
 		ICCID: "target-iccid", NetworkEnabled: true, IPVersion: "v4v6", APN: "club.apn",
 	}})
@@ -1126,8 +1131,11 @@ func TestHandleESIMSwitchAfterConnectsUsingTargetProfilePolicy(t *testing.T) {
 
 	p.handleESIMSwitchAfter("dev-1", 0)
 
-	if !network.connected {
-		t.Fatal("target policy enables network; old disabled snapshot must not keep it off")
+	if be.rebootCalls != 1 {
+		t.Fatalf("rebootCalls=%d want 1", be.rebootCalls)
+	}
+	if network.connected {
+		t.Fatal("target data network must wait for the replacement worker after reboot")
 	}
 	if cfg := w.ConfigSnapshot(); !cfg.NetworkEnabled || cfg.IPVersion != "v4v6" || cfg.APN != "club.apn" {
 		t.Fatalf("target network policy not projected: %+v", cfg)
@@ -1136,7 +1144,7 @@ func TestHandleESIMSwitchAfterConnectsUsingTargetProfilePolicy(t *testing.T) {
 
 func TestHandleESIMSwitchAfterUsesTargetAirplanePolicy(t *testing.T) {
 	p := NewPool(&config.Config{})
-	defer p.cancel()
+	p.cancel()
 	p.SetPolicyResolver(&stubPolicyResolver{pol: cardpolicy.Policy{
 		ICCID: "target-iccid", AirplaneEnabled: true, NetworkEnabled: true,
 	}})
@@ -1154,8 +1162,11 @@ func TestHandleESIMSwitchAfterUsesTargetAirplanePolicy(t *testing.T) {
 	if network.connected {
 		t.Fatal("target airplane policy must stop the data session")
 	}
-	if len(be.setCalls) != 1 || be.setCalls[0] != backend.ModeRFOff {
-		t.Fatalf("setCalls=%v want [%v]", be.setCalls, backend.ModeRFOff)
+	if be.rebootCalls != 1 {
+		t.Fatalf("rebootCalls=%d want 1", be.rebootCalls)
+	}
+	if len(be.setCalls) != 0 {
+		t.Fatalf("setCalls=%v want none before reboot recovery", be.setCalls)
 	}
 	if cfg := w.ConfigSnapshot(); !cfg.AirplaneEnabled || cfg.NetworkEnabled {
 		t.Fatalf("target airplane policy not projected: %+v", cfg)

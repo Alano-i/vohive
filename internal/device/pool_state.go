@@ -513,6 +513,10 @@ func (w *Worker) mergeRuntimeSampleLocked(sample runtimeStatusSample, healthy bo
 		w.state.Runtime.LAC = status.LAC
 		w.state.Runtime.CellID = status.CellID
 	}
+	if sample.atRegistrationValid && preferATRegistrationStatus(w.state.Runtime.RegStatus, sample.atRegistrationStatus) {
+		w.state.Runtime.RegStatus = sample.atRegistrationStatus
+		w.state.Runtime.RegStatusText = sample.atRegistrationText
+	}
 	if sample.full || sample.simValid {
 		w.state.Runtime.SimInserted = status.SimInserted
 	}
@@ -526,6 +530,23 @@ func (w *Worker) mergeRuntimeSampleLocked(sample runtimeStatusSample, healthy bo
 	}
 	w.markRuntimeUpdatedLocked(healthy)
 	return true
+}
+
+func preferATRegistrationStatus(current, at int) bool {
+	return registrationStatusPriority(at) > registrationStatusPriority(current)
+}
+
+func registrationStatusPriority(status int) int {
+	switch status {
+	case 1, 5:
+		return 4
+	case 3:
+		return 3
+	case 2:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func (w *Worker) markRuntimeUpdatedLocked(healthy bool) {
